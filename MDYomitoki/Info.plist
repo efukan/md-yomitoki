@@ -28,6 +28,10 @@
 	<string>public.app-category.productivity</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>$(APP_COPYRIGHT)</string>
+	<key>MDYGitHubRepository</key>
+	<string>$(GITHUB_REPOSITORY)</string>
+	<key>MDYSupportEmail</key>
+	<string>$(SUPPORT_EMAIL)</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

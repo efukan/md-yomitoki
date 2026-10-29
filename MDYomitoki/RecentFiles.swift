@@ -183,6 +183,7 @@ final class RecentFilesPanel: NSObject, NSWindowDelegate {
         panel?.close()
         switch action {
         case .open(let url): AppDelegate.shared?.open([url])
+        case .openAll(let urls): AppDelegate.shared?.open(urls)
         case .showOpenPanel: AppDelegate.shared?.showOpenPanel()
         case .close: break
         }
@@ -198,7 +199,7 @@ final class RecentFilesPanel: NSObject, NSWindowDelegate {
 
 struct RecentFilesView: View {
     enum Action {
-        case open(URL), showOpenPanel, close
+        case open(URL), openAll([URL]), showOpenPanel, close
     }
 
     let currentPath: String?
@@ -236,6 +237,11 @@ struct RecentFilesView: View {
             footer
         }
         .frame(minWidth: 420, minHeight: 300)
+        // 文書ウィンドウと同じく、ファイルをドロップして開ける（起動直後はこの画面しか無いため）
+        .dropDestination(for: URL.self) { urls, _ in
+            perform(.openAll(urls))
+            return true
+        }
         .onAppear {
             searchFocused = true
             // 今開いているファイルは飛ばして、次の候補を選んでおく（直前のファイルへすぐ戻れる）
@@ -254,12 +260,11 @@ struct RecentFilesView: View {
 
     @ViewBuilder
     private var list: some View {
-        if filtered.isEmpty {
-            ContentUnavailableView(
-                recent.items.isEmpty ? "最近開いたファイルはありません" : "一致するファイルがありません",
-                systemImage: "clock"
-            )
-            .frame(maxHeight: .infinity)
+        if recent.items.isEmpty {
+            welcome
+        } else if filtered.isEmpty {
+            ContentUnavailableView("一致するファイルがありません", systemImage: "magnifyingglass")
+                .frame(maxHeight: .infinity)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -284,6 +289,30 @@ struct RecentFilesView: View {
                 }
             }
         }
+    }
+
+    /// 初めて起動したとき（履歴が空のとき）の案内。何をするアプリかと、最初の一歩（開く・ドロップ）を示す。
+    private var welcome: some View {
+        VStack(spacing: 12) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath))
+                .resizable()
+                .frame(width: 64, height: 64)
+            Text("\(AppDelegate.appName) へようこそ")
+                .font(.title2.bold())
+            // 意味の切れ目で改行する（任せると「たび／に」のように切れるため）
+            Text("AI に書かせている Markdown ファイルを開いておくと、\n書き換わるたびに表示が追いかけて、変わったところに印を付けます。\nファイルを開くか、この画面にドロップしてください。")
+                .multilineTextAlignment(.center)
+                .lineSpacing(2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 500)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Markdown ファイルを開く…") { perform(.showOpenPanel) }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.top, 4)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var footer: some View {

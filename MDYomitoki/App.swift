@@ -96,6 +96,13 @@ struct MDYomitokiApp: App {
                     Divider()
                     Button("git HEAD と比較／比較をやめる") { appDelegate.activeModel?.toggleGitBaseline() }
                 }
+                // 標準の「MDよみとき ヘルプ」はヘルプブックが無いと「ヘルプはありません」と出るだけなので、GitHub へのリンクに置き換える
+                CommandGroup(replacing: .help) {
+                    Button("使い方（README）") { NSWorkspace.shared.open(ProjectLinks.readme) }
+                    Button("不具合の報告・要望（メール）…") { NSWorkspace.shared.open(ProjectLinks.reportMail) }
+                    Button("不具合の報告・要望（GitHub）…") { NSWorkspace.shared.open(ProjectLinks.newIssue) }
+                    Button("更新履歴") { NSWorkspace.shared.open(ProjectLinks.releases) }
+                }
             }
     }
 }
@@ -143,6 +150,7 @@ private struct SettingsView: View {
                     Text("オフにすると、http・https の画像やスタイルなどを読み込みません。")
                 }
             }
+            DefaultAppSection()
             Section {
                 Toggle(isOn: $settings.restoreOpenFiles) {
                     Text("前回開いていたファイルを開く")
@@ -178,6 +186,117 @@ private struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 480)
         .fixedSize()
+    }
+}
+
+/// 設定ウィンドウの「Markdown ファイル」：.md を開く既定のアプリを MDよみとき にする。
+/// Info.plist の LSHandlerRank は Alternate（ほかのアプリが既定なら勝手に奪わない）なので、利用者がここで選ぶ。
+/// 同じ Bundle ID の別のコピー（開発中のビルドと /Applications の公開版など）が既定なら、もう MDよみとき とみなす。
+private struct DefaultAppSection: View {
+    @State private var current: URL?
+    @State private var failed = false
+
+    private var isDefault: Bool {
+        current.flatMap { Bundle(url: $0)?.bundleIdentifier } == Bundle.main.bundleIdentifier
+    }
+
+    var body: some View {
+        Section {
+            if isDefault {
+                Label("Finder でダブルクリックすると、\(AppDelegate.appName) で開きます。", systemImage: "checkmark.circle.fill")
+            } else {
+                LabeledContent {
+                    Button("\(AppDelegate.appName) にする") { makeDefault() }
+                } label: {
+                    Text("ダブルクリックで開くアプリ")
+                    Text(current.map { "今は「\(Self.name(of: $0))」で開きます。" } ?? "まだ決まっていません。")
+                }
+            }
+            if failed {
+                Text("変更できませんでした。Finder でファイルを選び、「情報を見る」の「このアプリケーションで開く」で選んでから「すべてを変更」を押してください。")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Markdown ファイル")
+        }
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        current = NSWorkspace.shared.urlForApplication(toOpen: .markdown)
+    }
+
+    /// Finder と同じ表示名（拡張子を表示する設定でも .app は付けない）
+    private static func name(of app: URL) -> String {
+        let name = FileManager.default.displayName(atPath: app.path)
+        return name.hasSuffix(".app") ? String(name.dropLast(4)) : name
+    }
+
+    private func makeDefault() {
+        Task {
+            do {
+                try await NSWorkspace.shared.setDefaultApplication(at: Bundle.main.bundleURL, toOpen: .markdown)
+                failed = false
+            } catch {
+                failed = true
+            }
+            refresh()
+        }
+    }
+}
+
+/// 「ヘルプ」メニューから開く GitHub のページ。リポジトリは xcconfig の GITHUB_REPOSITORY（Info.plist の MDYGitHubRepository）。
+@MainActor
+enum ProjectLinks {
+    static var repository: URL {
+        let name = Bundle.main.object(forInfoDictionaryKey: "MDYGitHubRepository") as? String ?? "efukan/md-yomitoki"
+        return URL(string: "https://github.com/\(name)")!
+    }
+
+    static var readme: URL { URL(string: repository.absoluteString + "#readme")! }
+    static var releases: URL { repository.appending(path: "releases") }
+
+    /// 新しい Issue の画面（GitHub のアカウントが要る）。
+    static var newIssue: URL {
+        var components = URLComponents(url: repository.appending(path: "issues/new"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "body", value: reportBody)]
+        return components.url!
+    }
+
+    /// 不具合の報告・要望のメール（アカウントが無くても送れる窓口）。宛先は xcconfig の SUPPORT_EMAIL（Info.plist の MDYSupportEmail）。
+    static var reportMail: URL {
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = Bundle.main.object(forInfoDictionaryKey: "MDYSupportEmail") as? String ?? ""
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "\(AppDelegate.appName) \(version) について"),
+            URLQueryItem(name: "body", value: reportBody),
+        ]
+        return components.url!
+    }
+
+    private static var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+    }
+
+    /// 報告の本文のひな形。調べるのに要るアプリと macOS の版を入れておく（送る前に利用者が見て直せる）。
+    private static var reportBody: String {
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        #if arch(arm64)
+        let cpu = "Apple シリコン"
+        #else
+        let cpu = "Intel"
+        #endif
+        return """
+            （起きたこと・してほしいことを書いてください。不具合なら、どうすると起きるかも書いてもらえると助かります）
+
+
+
+            ---
+            \(AppDelegate.appName) \(version)（ビルド \(build)）
+            macOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)（\(cpu)）
+            """
     }
 }
 

@@ -5,7 +5,7 @@ AIエージェント（Claude Code等）が外部で書き換える日本語Mark
 利用者向けの説明は `README.md`。このファイルは開発する人と AI エージェント向けの仕様とルールで、実装の理由（なぜそうしたか）も残す。
 
 - 表示名：『MDよみとき』／内部ターゲット名：`MDYomitoki`／Bundle ID：`jp.efukan.mdyomitoki`
-- 名称・識別子・バージョン・著作権表示（`APP_COPYRIGHT`、「© 2026 efukan」）は **`Config/App.xcconfig` の1箇所だけ** で管理する（Info.plist は変数参照のみ）
+- 名称・識別子・バージョン・著作権表示（`APP_COPYRIGHT`、「© 2026 efukan」）・公開先（`GITHUB_REPOSITORY`）・問い合わせ先（`SUPPORT_EMAIL`）は **`Config/App.xcconfig` の1箇所だけ** で管理する（Info.plist は変数参照のみ）
   - Finder がローカライズ名を出すのは「Info.plist の CFBundleName/DisplayName がバンドルのファイル名と一致する」ときだけなので、Info.plist 側は `$(PRODUCT_NAME)` にしている。日本語の表示名はビルドスクリプト（project.yml の `Localized Display Name`）が `APP_DISPLAY_NAME` から `ja.lproj` / `en.lproj` の `InfoPlist.strings` を生成する（`LSHasLocalizedDisplayName = YES`）。
 
 ## 作業ルール（必ず守る）
@@ -30,6 +30,8 @@ make release   # 配布用の dmg を作って公証し、自動アップデー�
 make publish   # GitHub に v<版> の Release を作って dmg と appcast.xml を添付する（＝利用者に配信）
 make dmg SIGN="Apple Development"   # 公証の手前まで（証明書を変えて手順だけ試す）
 ```
+
+- 開発中のビルドは公開版と同じ Bundle ID なので、最近使ったファイル・付箋・設定などの保存データ（UserDefaults）を、この Mac で使っている公開版と共有している。履歴が空の状態などを試すときは、Bundle ID を変えた別のコピーで行う（`xcodebuild -project MDYomitoki.xcodeproj -scheme MDYomitoki -configuration Debug -derivedDataPath <一時フォルダ>.noindex PRODUCT_BUNDLE_IDENTIFIER=jp.efukan.mdyomitoki.uitest build`。試した後はコピーと `jp.efukan.mdyomitoki.uitest` の保存データを消す）。起動引数（`-recentFiles …`）で読む値を上書きする方法は使わない。読むのは上書きした値でも、アプリが書き込むと本物の保存データに入り、履歴を消してしまう。
 
 ## 技術仕様
 
@@ -80,6 +82,9 @@ make dmg SIGN="Apple Development"   # 公証の手前まで（証明書を変え
 - 開く導線：`Cmd+O`、`⇧⌘O`（最近使ったファイル）、Finder（`application(_:open:)`）、Dock アイコンへのドロップ、ウィンドウへの D&D（SwiftUI の `dropDestination` と WKWebView サブクラスのドラッグ受け口）。同じファイルを再度開いたら既存ウィンドウを前面に出す。
 - 見えていない間（裏のタブ・隠れた／しまったウィンドウ。`occlusionState` とタブの選択で判断）に外部更新が来たら、タブにオレンジの点（`tab.accessoryView`）を出し、Dock のバッジにその文書の数を出す。ウィンドウがキーになるか見えるようになったら消す。横に並べて見ている時は出さない。
 - ファイルを開いていないとき（起動時・ウィンドウが無い状態で Dock をクリック）は「最近使ったファイル」のパネルを出す。SwiftUI のアプリでは `applicationOpenUntitledFile` が呼ばれないので、`applicationDidFinishLaunching`（Finder から渡されたファイルを待つため main.async）と `applicationShouldHandleReopen` で判断する。
+  - 履歴が空のとき（初めて起動したとき）は、一覧の代わりに「ようこそ」の案内（何をするアプリか・開くボタン）を出す。このパネルにもファイルをドロップして開ける。
+- .md を開く既定のアプリ：Info.plist の `LSHandlerRank` は Alternate（ほかのアプリが既定なら勝手に奪わない）。設定ウィンドウの「Markdown ファイル」で、今の既定のアプリを見せ、`NSWorkspace.setDefaultApplication(at:toOpen:)` で MDよみとき にできる。同じ Bundle ID の別のコピー（開発中のビルドと公開版）が既定なら、もう MDよみとき とみなす。
+- 「ヘルプ」メニュー：標準の「MDよみとき ヘルプ」はヘルプブックが無いと「ヘルプはありません」と出るだけなので、GitHub の README・不具合の報告と要望（メールと GitHub の Issue の2つ。Issue はアカウントが要るので、無い人のためにメールも置く。どちらも本文にアプリと macOS の版を入れておく）・Releases へのリンクに置き換える（`ProjectLinks`。リポジトリと宛先は xcconfig の `GITHUB_REPOSITORY`・`SUPPORT_EMAIL` を Info.plist の `MDYGitHubRepository`・`MDYSupportEmail` で渡す）。
 - メニューコマンドは前面ウィンドウのモデル（`AppDelegate.activeModel`。アプリが前面に無い時は一番手前の文書ウィンドウ）へ届ける。**キーボードショートカットは必ずメニュー（SwiftUI の `.commands`）に置く**。ツールバーのボタンに `.keyboardShortcut` を付けても、AppKit の NSWindow に SwiftUI のツールバーを橋渡しする構成では効かない。
 
 ### プレビュー（WKWebView）

@@ -8,6 +8,8 @@ APP_COPYRIGHT = © 2026 efukan
 
 // 公開先（GitHub の owner/リポジトリ）。自動アップデートの更新情報（Info.plist の SUFeedURL）と make publish が使う。
 GITHUB_REPOSITORY = efukan/md-yomitoki
+// 不具合の報告・要望の宛先（「ヘルプ」メニューの「メール」）。
+SUPPORT_EMAIL = efukan.dev@gmail.com
 
 MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 1
