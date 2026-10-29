@@ -53,6 +53,11 @@ archive: gen
 	rm -rf "$(ARCHIVE)"
 	xcodebuild -project MDYomitoki.xcodeproj -scheme MDYomitoki -configuration Release -destination 'generic/platform=macOS' \
 		-derivedDataPath $(DERIVED) -archivePath "$(ARCHIVE)" -quiet archive CODE_SIGN_IDENTITY="$(SIGN)"
+	@# archive が途中に作るアプリの写しは macOS に登録され、Quick Look がそちらの機能拡張を使ってしまう（開発中のビルドの
+	@# Quick Look が効かなくなる）。登録を外して消す。
+	/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u \
+		"$(DERIVED)/Build/Intermediates.noindex/ArchiveIntermediates/MDYomitoki/InstallationBuildProductsLocation/Applications/$(PRODUCT).app" 2>/dev/null || true
+	rm -rf "$(DERIVED)/Build/Intermediates.noindex/ArchiveIntermediates"
 	@# Sparkle の中の部品は ad-hoc 署名のまま入る（Xcode の書き出しを通さないため）。公証に通るよう、内側から順に署名し直す。
 	for x in XPCServices/Installer.xpc XPCServices/Downloader.xpc Autoupdate Updater.app; do \
 		codesign -f -s "$(SIGN)" -o runtime --timestamp --preserve-metadata=entitlements "$(SPARKLE_FW)/Versions/B/$$x" || exit 1; \

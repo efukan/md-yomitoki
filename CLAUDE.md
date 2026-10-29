@@ -49,6 +49,7 @@ make dmg SIGN="Apple Development"   # 公証の手前まで（証明書を変え
   - 版は `Config/App.xcconfig` の `MARKETING_VERSION`（表示）と `CURRENT_PROJECT_VERSION`（ビルド番号。出すたびに上げる。Sparkle はこちらで新旧を比べる）。リリースノートは `ReleaseNotes/<版>.md`。Markdown で書き、GitHub の Release のページと、更新の画面（更新先の版のノートだけが出る）に出る。初版の 0.1.0 は誰も更新では見ないので、Release のページで初めて知る人向けのアプリの紹介にした。2版目からはその版で変わったことを書く。見出しは `###` まで（Release のページでは題が大きく出るので、`##` だと本文の見出しが題と張り合う）。その下の区切りは太字の1行にする。
   - dmg の名前は版なしの `MDYomitoki.dmg`（`https://github.com/<GITHUB_REPOSITORY>/releases/latest/download/MDYomitoki.dmg` が常に最新版を指すので、Web サイトのダウンロードボタンに使える。Release ごとの URL はタグで分かれるので Sparkle の更新にも差し支えない）。名前で版を見分けられないので、`appcast` と `publish` は appcast.xml の `sparkle:version` がこのビルド番号かを確かめる。
   - `preflight`（公証の前に止める）：リリースノートが無い・`v<版>` の Release がもうある・ビルド番号が公開中の appcast の `sparkle:version` 以下（更新が黙って届かなくなる）。`publish` の前には、コミットしていない変更が無いこと・dmg が公証済み（`stapler validate`）・appcast.xml が dmg より新しいことを確かめる。
+  - archive が途中に作るアプリの写し（`Intermediates.noindex/ArchiveIntermediates/…/MDYomitoki.app`）は macOS に登録され、Quick Look がそちらの機能拡張を使ってしまう（開発中のビルドの Quick Look が効かなくなる）。`make archive` の終わりに登録を外して消す。
   - archive も同じ `-derivedDataPath` で作る（Sparkle の `generate_appcast` などを `build/DerivedData.noindex/SourcePackages` から使うため）。
   - 出す時：版を上げる → `ReleaseNotes/<版>.md` を書く → `make release` → コミットして push → `make publish`。
   - 前準備（1回だけ・ユーザーが行う）：Developer ID Application 証明書をキーチェーンに入れる（Xcode の Settings → Accounts → Manage Certificates）。公証の資格情報を `xcrun notarytool store-credentials MDYomitoki --apple-id <Apple ID> --team-id 4NJNS5T7UM` で保存する（App 用パスワードを聞かれる）。プロファイル名は `NOTARY_PROFILE` で変えられる。
@@ -202,6 +203,7 @@ make dmg SIGN="Apple Development"   # 公証の手前まで（証明書を変え
   - 描くのは先頭の 1MB まで（Quick Look には時間の制限がある）。切ったときは冒頭にその旨を出す。10MB を超えるファイルは読まない（Quick Look の既定の表示になる）。
 - 別のアプリ（MDHero など）も Markdown の Quick Look を持っていると、そちらが使われることがある。「システム設定」→「一般」→「ログイン項目と機能拡張」→「Quick Look」で切り替える。登録の状況は `pluginkit -m -v -p com.apple.quicklook.preview`。開発中のビルドの機能拡張は、`make build` の後に起動するか `pluginkit -a <appex>` で登録される。
 - 配布：Xcode が Developer ID・Hardened Runtime・タイムスタンプで署名する（xcconfig がすべてのターゲットに効く）。`make archive` が機能拡張の Hardened Runtime も確かめる。
+- Finder のアイコンの縮図（Thumbnail の機能拡張）は作って試したがやめた。macOS 27 では Markdown（public.plain-text の一種）に標準のテキストの縮図（`com.apple.quicklook.thumbnail.TextExtension`）が優先され、登録して有効にしても、アプリを Applications に置いても呼ばれなかった。
 
 ## ファイル構成
 
