@@ -62,15 +62,20 @@ archive: gen
 	codesign --verify --deep --strict "$(RELEASE_APP)"
 	codesign -dv "$(RELEASE_APP)" 2>&1 | grep -q 'flags=.*runtime' || { echo "Hardened Runtime が付いていません"; exit 1; }
 
-dmg: archive
-	rm -rf "$(RELEASE)/dmg" "$(DMG)"
-	mkdir -p "$(RELEASE)/dmg"
-	ditto "$(RELEASE_APP)" "$(RELEASE)/dmg/$(PRODUCT).app"
-	ln -s /Applications "$(RELEASE)/dmg/Applications"
-	diskutil image create from --format ULFO --volumeName "$(DISPLAY) $(VERSION)" "$(RELEASE)/dmg" "$(DMG)"
+# dmg は dmgbuild で作る（背景・アイコンの並び・ウィンドウの大きさ・ディスクのアイコン。設定は Config/dmg_settings.py）。
+# 版を固定して build/ の中の専用の Python 環境に入れる（make clean で消えたら次の make dmg で入れ直す）。
+DMGBUILD := build/dmgbuild/bin/dmgbuild
+
+$(DMGBUILD):
+	python3 -m venv build/dmgbuild
+	build/dmgbuild/bin/pip install -q --disable-pip-version-check dmgbuild==1.6.7
+
+dmg: archive $(DMGBUILD)
+	rm -f "$(DMG)"
+	"$(DMGBUILD)" -s Config/dmg_settings.py -D app="$(RELEASE_APP)" \
+		-D icon="$(RELEASE_APP)/Contents/Resources/AppIcon.icns" -D background=Design/dmg/background.tiff \
+		"$(DISPLAY) $(VERSION)" "$(DMG)"
 	codesign --sign "$(SIGN)" --timestamp "$(DMG)"
-	@# dmg に詰めるための写しは残さない（Spotlight に見つかってアプリが何個も並ぶ）
-	rm -rf "$(RELEASE)/dmg"
 	@echo "→ $(DMG)"
 
 release: preflight dmg
