@@ -4,7 +4,9 @@ DISPLAY := $(call setting,APP_DISPLAY_NAME)
 VERSION := $(call setting,MARKETING_VERSION)
 BUILD := $(call setting,CURRENT_PROJECT_VERSION)
 REPO := $(call setting,GITHUB_REPOSITORY)
-DERIVED := build
+# Xcode の出力は名前が .noindex で終わるフォルダに置く（Spotlight が調べないので、開発中のアプリが
+# Spotlight やランチャーに「MDよみとき」として並ばない）。
+DERIVED := build/DerivedData.noindex
 APP := $(DERIVED)/Build/Products/Debug/$(PRODUCT).app
 XCODEBUILD := xcodebuild -project MDYomitoki.xcodeproj -scheme MDYomitoki -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=$(shell uname -m)'
 
@@ -34,7 +36,7 @@ register: build
 # 証明書を変えて途中まで試すとき：make dmg SIGN="Apple Development"
 SIGN ?= Developer ID Application
 NOTARY_PROFILE ?= MDYomitoki
-RELEASE := $(DERIVED)/release
+RELEASE := build/release
 ARCHIVE := $(RELEASE)/$(PRODUCT).xcarchive
 RELEASE_APP := $(ARCHIVE)/Products/Applications/$(PRODUCT).app
 SPARKLE_FW := $(RELEASE_APP)/Contents/Frameworks/Sparkle.framework
@@ -67,6 +69,8 @@ dmg: archive
 	ln -s /Applications "$(RELEASE)/dmg/Applications"
 	diskutil image create from --format ULFO --volumeName "$(DISPLAY) $(VERSION)" "$(RELEASE)/dmg" "$(DMG)"
 	codesign --sign "$(SIGN)" --timestamp "$(DMG)"
+	@# dmg に詰めるための写しは残さない（Spotlight に見つかってアプリが何個も並ぶ）
+	rm -rf "$(RELEASE)/dmg"
 	@echo "→ $(DMG)"
 
 release: preflight dmg
@@ -114,4 +118,4 @@ publish:
 		--target "$$(git rev-parse HEAD)" --title "$(DISPLAY) $(VERSION)" --notes-file "$(NOTES)"
 
 clean:
-	rm -rf $(DERIVED) MDYomitoki.xcodeproj
+	rm -rf build MDYomitoki.xcodeproj
