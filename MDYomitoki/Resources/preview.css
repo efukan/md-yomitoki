@@ -155,6 +155,18 @@ pre {
 }
 pre code { font-size: 1em; }
 
+/* 数式（KaTeX）。ブロックはコードの背景と等幅をやめ、本文の文字で中央に置く。長い式は横にスクロールする。 */
+pre.math-block {
+  background: none;
+  padding: 4px 0;
+  font-family: inherit;
+  white-space: normal;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+pre.math-block .katex-display { margin: 0; }
+.katex { font-size: 1.1em; }
+
 /* Mermaid の図（pre の中身を SVG に置き換える）。書き方の誤りで描けなかったときは理由とコードを出す。 */
 pre.mermaid-block:not(.mermaid-error) {
   background: none;
@@ -552,7 +564,7 @@ tbody tr td.chg-latest, thead tr th.chg-latest { background-color: var(--chg-lat
   pre { white-space: pre-wrap; overflow: visible; }
   .table-wrap { overflow: visible; }
   h1, h2, h3, h4, h5, h6 { break-after: avoid; }
-  pre, blockquote, tr, img, .mermaid-block { break-inside: avoid; }
+  pre, blockquote, tr, img, .mermaid-block, .math-block { break-inside: avoid; }
 }
 
 /* 脚注 */

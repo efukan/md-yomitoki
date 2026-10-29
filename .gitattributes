@@ -1,2 +1,3 @@
 # 同梱したライブラリ（minify 済み）は GitHub の言語の集計に入れない
 MDYomitoki/Resources/*.min.js linguist-vendored
+MDYomitoki/Resources/katex.min.css linguist-vendored

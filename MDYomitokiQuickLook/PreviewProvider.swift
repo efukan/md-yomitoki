@@ -17,7 +17,7 @@ final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
 /// Quick Look に渡す HTML。Markdown の変換（日本語の太字の補正・表・アラート・フロントマター）はアプリと同じ
 /// `Markdown.swift`、見た目はアプリのプレビューと同じ `preview.css`。
 /// - Sandbox の中なので、隣の画像は読めない。ネットにもつながない（見ただけで外に通信しない）。画像は代替テキストにする。
-/// - コードの色付けは、アプリと同じ highlight.js を JavaScriptCore で動かして HTML にしておく。Mermaid の図は描かない。
+/// - コードの色付けは、アプリと同じ highlight.js を JavaScriptCore で動かして HTML にしておく。Mermaid の図と数式は描かない（書いたまま見せる）。
 enum QuickLookPage {
     /// アプリと同じく、これより大きいファイルは読まない（Quick Look は既定の表示になる）
     static let maxFileSize: Int64 = 10_000_000
@@ -29,7 +29,7 @@ enum QuickLookPage {
     static func html(for url: URL) throws -> String {
         let (whole, _) = try TextFile.decode(try Data(regularFileAt: url, limit: maxFileSize))
         let (text, truncated) = head(of: whole)
-        let body = highlightCode(replaceImages(defuse(Markdown.render(text).html)))
+        let body = highlightCode(showMathSource(replaceImages(defuse(Markdown.render(text).html))))
         let css = Bundle.main.url(forResource: "preview", withExtension: "css")
             .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
         let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "MDよみとき"
@@ -93,6 +93,14 @@ enum QuickLookPage {
         html.replacing(/<img\b[^>]*>/.ignoresCase()) { match in
             let alt = match.output.firstMatch(of: /\balt="([^"]*)"/)?.output.1 ?? ""
             return "<span class=\"ql-image\">画像\(alt.isEmpty ? "" : "：\(alt)")</span>"
+        }
+    }
+
+    /// 数式（`Markdown.protectMath` が作る空の span）は描かないので、書いたままの式をコードとして見せる。
+    static func showMathSource(_ html: String) -> String {
+        html.replacing(/<span class="math( math-display)?" data-tex="([^"]*)"><\/span>/) { match in
+            let dollars = match.output.1 == nil ? "$" : "$$"
+            return "<code>\(dollars)\(match.output.2)\(dollars)</code>"
         }
     }
 

@@ -274,15 +274,26 @@ enum Markdown {
     static func preprocess(_ source: String) -> String {
         // フロントマターは cmark に渡さない（水平線と見出しになってしまう）。行番号がずれないよう空行にする。
         let frontMatter = frontMatterLineCount(source) ?? 0
-        // 直すもの（全角スペース・`**`）が無ければそのまま渡す（大きな文書で行ごとに調べない）
-        guard frontMatter > 0 || contains(source[...], "\u{3000}") || contains(source[...], "**") else { return source }
+        // 直すもの（全角スペース・`**`・数式の `$`）が無ければそのまま渡す（大きな文書で行ごとに調べない）
+        guard frontMatter > 0 || contains(source[...], "\u{3000}") || contains(source[...], "**")
+                || contains(source[...], "$") else { return source }
+        let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
         var openFence: (char: Character, count: Int)?
+        var mathBlockEnd: Int?  // `$$` だけの行で囲んだ数式の、閉じ側の行
         var out = ""
         out.reserveCapacity(source.utf8.count + 64)
-        for (index, line) in source.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+        for (index, line) in lines.enumerated() {
             if index > 0 { out += "\n" }
             if index < frontMatter {
                 continue
+            } else if let end = mathBlockEnd {
+                // 数式のブロックはコードフェンス（```math）にして、中身を Markdown として読ませない
+                if index == end {
+                    out += mathFence(line, opening: false)
+                    mathBlockEnd = nil
+                } else {
+                    out += line
+                }
             } else if let fence = fence(in: line) {
                 if let open = openFence {
                     if fence.char == open.char, fence.count >= open.count, fence.bare { openFence = nil }
@@ -290,10 +301,129 @@ enum Markdown {
                     openFence = (fence.char, fence.count)
                 }
                 out += line
-            } else if openFence == nil, contains(line, "\u{3000}") || contains(line, "**") {
-                out += fixJapaneseBold(rescueFullwidthMarker(String(line)))
-            } else {
+            } else if openFence != nil {
                 out += line
+            } else if isMathDelimiter(line),
+                      let end = lines[(index + 1)...].firstIndex(where: { isMathDelimiter($0) || fence(in: $0) != nil }),
+                      isMathDelimiter(lines[end]) {
+                out += mathFence(line, opening: true)
+                mathBlockEnd = end
+            } else {
+                var fixed = contains(line, "$") ? protectMath(String(line)) : String(line)
+                if contains(line, "\u{3000}") || contains(line, "**") {
+                    fixed = fixJapaneseBold(rescueFullwidthMarker(fixed))
+                }
+                out += fixed
+            }
+        }
+        return out
+    }
+
+    // MARK: - 数式（GitHub と同じ書き方。描くのはプレビューの KaTeX）
+
+    /// `$$` だけの行（数式のブロックの区切り。リストや引用の中でも拾えるように、先頭の空白と `>` は無視する）。
+    private static func isMathDelimiter(_ line: Substring) -> Bool {
+        line.drop { $0 == " " || $0 == "\t" || $0 == ">" }.trimmingCharacters(in: .whitespaces) == "$$"
+    }
+
+    /// `$$` の行を ```math のフェンスにする（先頭の空白と `>` は残す）。
+    private static func mathFence(_ line: Substring, opening: Bool) -> String {
+        let prefix = line.prefix { $0 == " " || $0 == "\t" || $0 == ">" }
+        return prefix + (opening ? "```math" : "```")
+    }
+
+    /// 行の中の数式（`$…$`・`$$…$$`・`` $`…`$ ``）を、中身を属性に入れた空の span にする。
+    /// 属性の中は Markdown として読まれない（`_` が斜体になったり `\\` が減ったりしない）。
+    /// `$` の規則は Pandoc・GitHub と同じ：開く `$` の後と閉じる `$` の前は空白でなく、閉じる `$` の後は数字でない
+    /// （`$5 と $10` のような金額を数式にしない）。インラインコードの中と `\$` は数式にしない。
+    static func protectMath(_ line: String) -> String {
+        let chars = Array(line)
+        var out = ""
+        var changed = false
+        var i = 0
+        while i < chars.count {
+            switch chars[i] {
+            case "\\":
+                out.append(chars[i])
+                if i + 1 < chars.count { out.append(chars[i + 1]) }
+                i += 2
+            case "`":
+                let n = runLength(chars, at: i)
+                let end = closingBackticks(chars, from: i + n, length: n).map { $0 + n } ?? i + n
+                out += String(chars[i..<end])
+                i = end
+            case "$":
+                if let (tex, display, end) = math(in: chars, at: i) {
+                    out += "<span class=\"\(display ? "math math-display" : "math")\" data-tex=\"\(attributeEscaped(tex))\"></span>"
+                    changed = true
+                    i = end
+                } else {
+                    out.append(chars[i])
+                    i += 1
+                }
+            default:
+                out.append(chars[i])
+                i += 1
+            }
+        }
+        return changed ? out : line
+    }
+
+    /// i の `$` から始まる数式の中身と、表示用（`$$`）か、数式の後ろの位置。
+    private static func math(in chars: [Character], at i: Int) -> (String, display: Bool, end: Int)? {
+        let next = i + 1 < chars.count ? chars[i + 1] : nil
+        if next == "`" {
+            // $`…`$（GitHub の書き方。中身に `$` を書ける）
+            let n = runLength(chars, at: i + 1)
+            guard let close = closingBackticks(chars, from: i + 1 + n, length: n),
+                  close + n < chars.count, chars[close + n] == "$", close > i + 1 + n else { return nil }
+            return (String(chars[(i + 1 + n)..<close]), false, close + n + 1)
+        }
+        if next == "$" {
+            // $$…$$（行の中の表示用の数式）
+            var j = i + 2
+            while j + 1 < chars.count {
+                if chars[j] == "\\" { j += 2; continue }
+                if chars[j] == "`" { return nil }
+                if chars[j] == "$" && chars[j + 1] == "$" {
+                    let tex = String(chars[(i + 2)..<j])
+                    return tex.trimmingCharacters(in: .whitespaces).isEmpty ? nil : (tex, true, j + 2)
+                }
+                j += 1
+            }
+            return nil
+        }
+        guard let next, !next.isWhitespace else { return nil }
+        var j = i + 1
+        while j < chars.count {
+            if chars[j] == "\\" { j += 2; continue }
+            // インラインコードの中の `$` を閉じ側にしない（`$5 と `$x$`` を数式にしない）
+            if chars[j] == "`" { return nil }
+            if chars[j] == "$" {
+                let after = j + 1 < chars.count ? chars[j + 1] : nil
+                if j > i + 1, !chars[j - 1].isWhitespace, !(after?.isASCII == true && after?.isNumber == true) {
+                    return (String(chars[(i + 1)..<j]), false, j + 1)
+                }
+            }
+            j += 1
+        }
+        return nil
+    }
+
+    /// 属性の値に入れる。`|`（表のセルの区切り）・`*`（太字の補正）・`` ` ``（インラインコード）も文字参照にして、
+    /// cmark とこのファイルの前処理に記号として読ませない。
+    private static func attributeEscaped(_ text: String) -> String {
+        var out = ""
+        for c in text {
+            switch c {
+            case "&": out += "&amp;"
+            case "\"": out += "&quot;"
+            case "<": out += "&lt;"
+            case ">": out += "&gt;"
+            case "|": out += "&#124;"
+            case "*": out += "&#42;"
+            case "`": out += "&#96;"
+            default: out.append(c)
             }
         }
         return out

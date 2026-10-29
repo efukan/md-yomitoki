@@ -42,7 +42,7 @@ make dmg SIGN="Apple Development"   # 公証の手前まで（証明書を変え
   - ad-hoc 署名だとビルドのたびに TCC の許可がリセットされるので使わない。
 - エンタイトルメントは無し（WebKit の JIT は WebContent プロセス側なので不要。cmark は静的リンク）。
 - 最小OSは **macOS 15**。Swift 6（strict concurrency）。UI 状態は `@MainActor`。
-- XcodeGen（`project.yml`）＋ `Config/App.xcconfig` ＋ `Makefile`。依存は `swiftlang/swift-cmark`（gfm ブランチを revision で固定）と Sparkle（2.10.1、MIT）と、同梱の highlight.js（`Resources/highlight.min.js`、v11.11.1 のよく使う言語の版、BSD-3）と Mermaid（`Resources/mermaid.min.js`、v12.2.0、MIT、jsDelivr の `dist/mermaid.min.js`）。更新するときは同じ名前で差し替える。
+- XcodeGen（`project.yml`）＋ `Config/App.xcconfig` ＋ `Makefile`。依存は `swiftlang/swift-cmark`（gfm ブランチを revision で固定）と Sparkle（2.10.1、MIT）と、同梱の highlight.js（`Resources/highlight.min.js`、v11.11.1 のよく使う言語の版、BSD-3）と Mermaid（`Resources/mermaid.min.js`、v12.2.0、MIT、jsDelivr の `dist/mermaid.min.js`）と KaTeX（`Resources/katex.min.js`・`katex.min.css`・`Resources/KaTeX/*.woff2`、v0.18.11、MIT、npm の `dist`。CSS はフォントの指定を woff2 だけにし、`fonts/` を外してアプリと同じ場所から読む）。更新するときは同じ名前で差し替える。
 
 ### リリースと自動アップデート（`make release` / `make publish`）
 - 配布の手順（`make release`）：`archive`（Release・arm64＋x86_64・Developer ID・Hardened Runtime・`--timestamp`。Sparkle の中の部品〈XPC サービス 2 つ・Autoupdate・Updater.app〉は ad-hoc 署名のまま入るので、内側から順に署名し直してからアプリにも署名し直す。署名と Hardened Runtime を確かめる）→ `dmg`（dmgbuild で、アプリと `/Applications` への別名・背景・アイコンの並び・ウィンドウの大きさ・ディスクのアイコンを ULFO の dmg に。dmg にも署名）→ 公証（`notarytool submit --wait`。通らなければログを出して止まる）→ dmg にチケットを付ける（`stapler staple`）→ `spctl` で確かめる → `appcast`。公証するのは dmg だけで、中のアプリにはチケットを付けない（初回起動時に Gatekeeper がネットで確かめる）。
@@ -63,7 +63,7 @@ make dmg SIGN="Apple Development"   # 公証の手前まで（証明書を変え
   - 手元で試す方法：古い版のアプリを取っておき、新しい版の dmg と `generate_appcast --download-url-prefix http://127.0.0.1:<port>/` で作った appcast を `python3 -m http.server` で配り、`defaults write jp.efukan.mdyomitoki SUFeedURL http://127.0.0.1:<port>/appcast.xml`（試した後は SU で始まる項目を消す）。
 
 ### ライセンス表示
-- 同梱するライブラリ（cmark-gfm・Sparkle・highlight.js・Mermaid）のライセンスを `Resources/Credits.html` に置き（冒頭に名前・用途・ライセンスの種類・リンクの一覧、その下に全文。全文は元のファイルの改行を外して段落にし、同梱しているほかのコードの区切りは太字）、「MDよみとき について」（自前のメニュー項目 → `AppDelegate.showAboutPanel`）に出す。HTML のままだとリンクが固定の青になり OS によっては本文も黒になるので、読み込んでから文字色の指定を外して渡す。アイコンも既定（`NSApp.applicationIconImage`）だと白紙の汎用アイコンになったので、`NSWorkspace` のアイコンを 64pt で渡す。ライブラリを足したり更新したりしたら Credits.html も更新する（Mermaid に含まれる他のライブラリの表示は mermaid.min.js の中にある）。
+- 同梱するライブラリ（cmark-gfm・Sparkle・highlight.js・Mermaid・KaTeX）のライセンスを `Resources/Credits.html` に置き（冒頭に名前・用途・ライセンスの種類・リンクの一覧、その下に全文。全文は元のファイルの改行を外して段落にし、同梱しているほかのコードの区切りは太字）、「MDよみとき について」（自前のメニュー項目 → `AppDelegate.showAboutPanel`）に出す。HTML のままだとリンクが固定の青になり OS によっては本文も黒になるので、読み込んでから文字色の指定を外して渡す。アイコンも既定（`NSApp.applicationIconImage`）だと白紙の汎用アイコンになったので、`NSWorkspace` のアイコンを 64pt で渡す。ライブラリを足したり更新したりしたら Credits.html も更新する（Mermaid に含まれる他のライブラリの表示は mermaid.min.js の中にある）。
 - アプリ自体は MIT（`LICENSE`）。著作権表示は xcconfig の `APP_COPYRIGHT`。
 
 ### アプリアイコン
@@ -99,6 +99,11 @@ make dmg SIGN="Apple Development"   # 公証の手前まで（証明書を変え
 - 文字の大きさ（「表示」の拡大 ⌘+／縮小 ⌘−／実際のサイズ ⌘0、`AppSettings.textScale`、全ウィンドウ共通）：プレビューは `WKWebView.pageZoom`、エディタは `NSScrollView.magnification`。100% 以外のときはステータスバーに倍率を出し、クリックで戻す。本文の幅（狭い 40em・標準 52em・広い 68em・ウインドウの幅、`AppSettings.contentWidth`）はプレビューの CSS 変数 `--content-width`。どちらも見ていた位置を保つ（JS の resize・ResizeObserver、エディタは表示位置の文字を基準に戻す）。
 - コードブロック：言語が書かれたもの（`language-xxx`）だけ highlight.js で色付けする（推測はしない）。新しく入ったブロックだけに行い、比較は色付け前の HTML で行う。差分更新で行番号を写すときは行番号を持つ要素どうしで対応させる（色付けの span で数がずれないように）。マウスを載せると右上に言語名とコピーのボタン（`#code-tools`、本文の外に重ねる。コピーは Swift が NSPasteboard に書く）。配色は GitHub に近い自前の CSS（ライト／ダーク）。
 - Mermaid（` ```mermaid `）：図のある文書を開いた時に初めて `mermaid.min.js` を読み込む（約 5.5MB）。pre 要素は残して中身を SVG に置き換える（差分更新で pre ごと使い回すので、変わらない図は描き直さない）。`securityLevel: 'strict'`、配色はライト／ダークに合わせ、見た目が変わったら描き直す。描けなければ理由と元のコードを出す。コピーのボタンは元のコードを写す。描くのは1つずつ順番に（`mermaidQueue`）。
+- 数式（GitHub と同じ書き方）：
+  - Swift の前処理（`Markdown.protectMath`）が、行の中の `$…$`・`$$…$$`・`` $`…`$ `` を `<span class="math" data-tex="…">`（表示用は `math-display` も）にする。中身は属性に入れるので Markdown として読まれない（`_` が斜体になったり `\\` が減ったりしない）。`|`・`*`・`` ` `` は文字参照にして、表のセルの区切りや太字の補正にも読ませない。`$$` だけの行で囲んだ数式は ```math のフェンスにする（行数は変えない。閉じる `$$` が無ければ何もしない）。
+  - `$` の規則は Pandoc・GitHub と同じ：開く `$` の後と閉じる `$` の前は空白でなく、閉じる `$` の後は数字でない（`$5 と $10` を数式にしない）。`\$` とインラインコードの中は数式にしない。閉じる `$` はインラインコードの手前までしか探さない。
+  - JS は数式のある文書を開いた時に初めて KaTeX（約 270KB ＋フォント）を読み込み、span と `code.language-math` のコードブロックを描く（Mermaid と同じく要素は残して中身を置き換えるので、変わらない数式は描き直さない）。書き方の誤りは KaTeX が赤い文字で元の式を出す。色は文字色に従う。コピーのボタンは元の式を写す。
+  - 数式は文字数に数えない（生 HTML と同じ扱い）。Quick Look では描かず、書いたままの式をコードとして見せる。確認用は `Samples/math.md`。
 - タスクリストのチェックボックス：プレビューでクリックすると Swift が元の行の `[ ]`／`[x]` を入れ替える（`MarkdownFormatter.toggleTask`。引用の中・全角スペースの書き方も対象）。未保存の編集が無ければすぐ保存し、あれば本文だけ書き換えて未保存のままにする（ほかの編集を勝手に保存しない）。JS 側では見た目を変えず、描き直しを待つ。⌘Z／⇧⌘Z で戻せる・やり直せる（ウィンドウの取り消しの履歴に積む。エディタの NSTextView と同じ履歴なので、エディタでの入力と順に戻せる。取り消し・やり直しも同じ切り替えで、同じく未保存の編集が無ければすぐ保存する。切り替えた直後の内容と違えば何もしない）。エディタがあれば本文の1文字の編集として映し（`applyWithoutUndo`）、外部更新のようにエディタの取り消しの履歴を消さない。外部更新が来たら履歴は消す。
 - 印刷（⌘P）・「PDF として書き出す…」：表示中のモードにかかわらずプレビューを `WKWebView.printOperation` で印刷する（PDF は保存先を選んで同じページ割りで書き出す）。印刷の間だけ WebView の見た目をライトにし、Mermaid もライトで描き直してから始める（終わったら戻す）。`@media print` で画面用の印・ルーラー・ボタンを出さず、本文だけを紙の幅で組む。
 - 戻る（⌘[）・進む（⌘]）：見出し一覧・⌘J／⇧⌘J・付箋・文書内リンク・ルーラーで移動する前の位置（`ScrollPosition`）を積み、行番号で戻す（プレビューとエディタ共通）。JS からの移動は `willJump` を先に送る。

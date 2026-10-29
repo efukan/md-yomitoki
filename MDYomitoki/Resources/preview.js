@@ -112,6 +112,7 @@ function morph(html) {
 
   let cursor = content.firstElementChild;
   const newDiagrams = [];
+  const newMath = [];
   for (const fresh of [...template.content.children]) {
     const key = withoutPositions(fresh.outerHTML);
     const old = reusable.get(key)?.shift();
@@ -125,6 +126,7 @@ function morph(html) {
       highlightCode(node);
       enableTaskCheckboxes(node);
       newDiagrams.push(...mermaidBlocks(node));
+      newMath.push(...mathElements(node));
       // フロントマターを開いていたなら、書き換わっても開いたままにする
       if (frontMatterOpen && node.matches('details.front-matter')) node.open = true;
     }
@@ -142,6 +144,7 @@ function morph(html) {
   blocks = [...content.querySelectorAll('[data-sourcepos]')];
   targets = blocks.filter((el) => !el.matches(NOT_BOOKMARKABLE));
   renderMermaid(newDiagrams);
+  renderMath(newMath);
 }
 
 // 文書の生 HTML のうち、外枠の動作を乗っ取れるものを文書へ入れる前に取り除く。
@@ -731,7 +734,7 @@ let copiedTimer = 0;
 function showCodeTools(pre) {
   hoveredPre = pre;
   const code = pre.querySelector('code');
-  codeLanguage.textContent = pre._mermaid ? 'mermaid' : code ? languageOf(code) : '';
+  codeLanguage.textContent = pre._mermaid ? 'mermaid' : pre._math ? 'math' : code ? languageOf(code) : '';
   copyButton.textContent = 'コピー';
   codeTools.hidden = false;
   const rect = pre.getBoundingClientRect();
@@ -753,7 +756,8 @@ document.addEventListener('mouseover', (event) => {
 copyButton.addEventListener('click', () => {
   if (!hoveredPre) return;
   // 最後の改行は除く（cmark はコードの末尾に改行を付ける）
-  post({ type: 'copy', text: (hoveredPre._mermaid?.source ?? hoveredPre.textContent).replace(/\n$/, '') });
+  const source = hoveredPre._mermaid?.source ?? hoveredPre._math?.source ?? hoveredPre.textContent;
+  post({ type: 'copy', text: source.replace(/\n$/, '') });
   copyButton.textContent = 'コピーしました';
   clearTimeout(copiedTimer);
   copiedTimer = setTimeout(() => { copyButton.textContent = 'コピー'; }, 1500);
@@ -824,6 +828,56 @@ async function drawMermaid(pres) {
       code.textContent = pre._mermaid.source;
       pre.replaceChildren(message, code);
       pre.classList.add('mermaid-error');
+    }
+  }
+}
+
+// MARK: - 数式
+
+// 数式（Swift が `$…$`・`$$…$$` を span.math[data-tex] に、`$$` の行で囲んだものと ```math を
+// code.language-math のコードブロックにしてある）を KaTeX で描く。KaTeX は数式のある文書を開いた時に初めて読み込む。
+// Mermaid と同じく、要素は残して中身だけを描いたものに置き換える（差分更新は描く前の HTML で比べるので、
+// 変わらない数式は描き直さない）。書き方の誤りは KaTeX が赤い文字で元の式を出す。色は文字色に従うのでテーマの切り替えでは描き直さない。
+let katexLoading = null;
+
+function mathElements(root) {
+  const spans = root.matches('span.math[data-tex]') ? [root] : [...root.querySelectorAll('span.math[data-tex]')];
+  const pres = [...(root.matches('pre') ? [root] : []), ...root.querySelectorAll('pre')]
+    .filter((pre) => pre.querySelector(':scope > code.language-math'));
+  return [...spans, ...pres];
+}
+
+function loadKatex() {
+  katexLoading ??= new Promise((resolve, reject) => {
+    const style = document.createElement('link');
+    style.rel = 'stylesheet';
+    style.href = 'yomitoki://app/katex.min.css';
+    document.head.appendChild(style);
+    const script = document.createElement('script');
+    script.src = 'yomitoki://app/katex.min.js';
+    script.onload = () => resolve(window.katex);
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  return katexLoading;
+}
+
+async function renderMath(elements) {
+  if (elements.length === 0) return;
+  let katex;
+  try {
+    katex = await loadKatex();
+  } catch {
+    return;  // 読み込めなければ、数式は元の書き方のまま（ブロックはコードとして）残る
+  }
+  for (const el of elements) {
+    if (!el.isConnected) continue;
+    if (el.matches('pre')) {
+      el._math ??= { source: el.querySelector('code')?.textContent ?? el.textContent };
+      el.classList.add('math-block');
+      katex.render(el._math.source, el, { displayMode: true, throwOnError: false });
+    } else {
+      katex.render(el.dataset.tex, el, { displayMode: el.classList.contains('math-display'), throwOnError: false });
     }
   }
 }

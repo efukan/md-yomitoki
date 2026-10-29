@@ -442,7 +442,7 @@ final class LocalSchemeHandler: NSObject, WKURLSchemeHandler {
     static let scheme = "yomitoki"
     static let shellURL = URL(string: "\(scheme)://app/preview.html")!
     private nonisolated static let appResources: Set<String> = [
-        "preview.html", "preview.css", "preview.js", "highlight.min.js", "mermaid.min.js",
+        "preview.html", "preview.css", "preview.js", "highlight.min.js", "mermaid.min.js", "katex.min.js", "katex.min.css",
     ]
     private nonisolated static let maxImageSize: Int64 = 100_000_000
 
@@ -491,12 +491,14 @@ final class LocalSchemeHandler: NSObject, WKURLSchemeHandler {
         switch url.host {
         case "app":
             let name = url.lastPathComponent
-            guard Self.appResources.contains(name),
+            // KaTeX のフォント（KaTeX_*.woff2）は katex.min.css から読まれる
+            let isKaTeXFont = name.hasPrefix("KaTeX_") && name.hasSuffix(".woff2")
+            guard Self.appResources.contains(name) || isKaTeXFont,
                   let file = Bundle.main.url(forResource: name, withExtension: nil) else {
                 throw URLError(.fileDoesNotExist)
             }
             let mime = UTType(filenameExtension: file.pathExtension)?.preferredMIMEType ?? "text/plain"
-            return (try Data(contentsOf: file), mime + "; charset=utf-8")
+            return (try Data(contentsOf: file), isKaTeXFont ? mime : mime + "; charset=utf-8")
         case "file":
             // 画像の名前のシンボリックリンクで別のファイルを読ませないよう、リンク先の名前も画像であることを確かめる
             let file = URL(fileURLWithPath: url.path).resolvingSymlinksInPath()

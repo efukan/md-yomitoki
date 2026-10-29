@@ -204,3 +204,44 @@ struct CodeBlockTests {
         #expect(html.contains("<pre data-sourcepos=\"1:1-3:3\"><code class=\"language-swift\">"))
     }
 }
+
+struct MathTests {
+    private func span(_ tex: String, display: Bool = false) -> String {
+        "<span class=\"\(display ? "math math-display" : "math")\" data-tex=\"\(tex)\"></span>"
+    }
+
+    @Test func inlineMathBecomesSpanWithTexInAttribute() {
+        #expect(Markdown.protectMath("面積は $a_1 \\times b_1$ です") == "面積は \(span("a_1 \\times b_1")) です")
+        #expect(Markdown.protectMath("$$E = mc^2$$") == span("E = mc^2", display: true))
+        #expect(Markdown.protectMath("$`x$y`$") == span("x$y"))
+    }
+
+    @Test func pricesEscapesAndCodeAreNotMath() {
+        #expect(Markdown.protectMath("$5 と $10") == "$5 と $10")
+        #expect(Markdown.protectMath("$100〜$200") == "$100〜$200")
+        #expect(Markdown.protectMath("\\$x$ と `$y$`") == "\\$x$ と `$y$`")
+        #expect(Markdown.protectMath("$ x$") == "$ x$")
+        // 閉じ側を探すのはインラインコードの手前まで
+        #expect(Markdown.protectMath("$5 と `$x$`") == "$5 と `$x$`")
+    }
+
+    @Test func markdownSymbolsInsideMathAreEscaped() {
+        // 表のセルの区切り・太字の補正・インラインコードに読まれない
+        #expect(Markdown.protectMath("$|x| * y$") == span("&#124;x&#124; &#42; y"))
+        #expect(Markdown.protectMath("$``a`b``$") == span("a&#96;b"))
+        let html = Markdown.render("| a |\n|---|\n| $|x|$ |").html
+        #expect(html.contains("data-tex=\"&#124;x&#124;\""))
+        #expect(!Markdown.render("$a_1 + b_1$ と $c_1$").html.contains("<em>"))
+    }
+
+    @Test func dollarBlockBecomesMathFenceWithSameLineCount() {
+        let source = "前\n$$\n\\frac{a}{b}\n$$\n後"
+        let processed = Markdown.preprocess(source)
+        #expect(processed == "前\n```math\n\\frac{a}{b}\n```\n後")
+        #expect(Markdown.render(source).html.contains("<code class=\"language-math\">\\frac{a}{b}\n</code>"))
+        // 閉じる `$$` が無ければそのまま
+        #expect(Markdown.preprocess("$$\nx") == "$$\nx")
+        // コードブロックの中は数式にしない
+        #expect(Markdown.preprocess("```\n$x$\n$$\n```") == "```\n$x$\n$$\n```")
+    }
+}
