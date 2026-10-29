@@ -1,0 +1,565 @@
+/* -apple-system の日本語フォールバックは標準ウェイトが太めで、太字との差がほとんど出ない。
+   日本語の文字範囲だけヒラギノ角ゴ W3/W6 を明示し、英数字はシステムフォント（SF）のままにする。 */
+@font-face {
+  font-family: "YomitokiJP";
+  src: local("HiraginoSans-W3");
+  font-weight: 100 500;
+  unicode-range: U+3000-30FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF;
+}
+@font-face {
+  font-family: "YomitokiJP";
+  src: local("HiraginoSans-W6");
+  font-weight: 600 900;
+  unicode-range: U+3000-30FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF;
+}
+
+:root {
+  color-scheme: light dark;
+  --text: -apple-system-label;
+  --text-secondary: -apple-system-secondary-label;
+  --separator: -apple-system-separator;
+  --accent: -apple-system-control-accent;
+  --fill: rgba(0, 0, 0, 0.045);
+  --fill-subtle: rgba(0, 0, 0, 0.022);
+  --code-bg: rgba(0, 0, 0, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fill: rgba(255, 255, 255, 0.07);
+    --fill-subtle: rgba(255, 255, 255, 0.03);
+    --code-bg: rgba(255, 255, 255, 0.08);
+  }
+}
+
+html {
+  background: transparent;
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  font-family: "YomitokiJP", -apple-system, "Hiragino Sans", sans-serif;
+  font-size: 15px;
+  line-height: 1.75;
+  line-break: strict;
+  overflow-wrap: anywhere;
+  hanging-punctuation: allow-end;
+  -webkit-text-size-adjust: none;
+}
+
+#content {
+  max-width: var(--content-width, 52em);  /* 「表示」メニューの「本文の幅」 */
+  margin: 0 auto;
+  padding: 28px 40px 96px;
+  /* 文書の生 HTML の position: fixed を本文の中に閉じ込め、画面全体を覆う偽の表示やリンクを置かせない */
+  contain: paint;
+}
+
+#content > :first-child { margin-top: 0; }
+
+/* 見出し：段の違いは大きさ・太さ・濃さで、節の区切りは上の余白で示す（下線は文書の題になる h1 だけ）。
+   余白は上の段ほど広く、見出しの直後に見出しが続くときはひとまとまりに見えるよう詰める。 */
+h1, h2, h3, h4, h5, h6 {
+  font-feature-settings: "palt";
+  letter-spacing: 0.03em;
+  line-height: 1.45;
+  margin: 0 0 0.55em;
+  font-weight: 700;
+}
+h1 { font-size: 1.7em; margin-top: 1.6em; padding-bottom: 0.3em; border-bottom: 1px solid var(--separator); }
+h2 { font-size: 1.38em; margin-top: 1.9em; }
+h3 { font-size: 1.15em; margin-top: 1.7em; }
+h4 { font-size: 1em; margin-top: 1.6em; }
+h5 { font-size: 0.93em; margin-top: 1.5em; color: var(--text-secondary); }
+h6 { font-size: 0.87em; margin-top: 1.5em; color: var(--text-secondary); font-weight: 600; }
+:is(h1, h2, h3, h4, h5, h6) + :is(h1, h2, h3, h4, h5, h6) { margin-top: 0.6em; }
+
+p, ul, ol, blockquote, pre, .table-wrap, details { margin: 0 0 1em; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+strong { font-weight: 700; }
+
+ul, ol { padding-left: 1.6em; }
+li + li { margin-top: 0.2em; }
+li > ul, li > ol { margin: 0.2em 0 0; }
+li:has(> input[type="checkbox"]) { list-style: none; }
+li > input[type="checkbox"] { margin: 0 0.4em 0 -1.3em; vertical-align: -0.1em; cursor: pointer; }
+
+/* 引用：本文より少しだけ淡く（secondary-label では薄すぎて読みにくい） */
+blockquote {
+  margin-left: 0;
+  padding: 0 0 0 1em;
+  border-left: 3px solid var(--separator);
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+}
+
+/* GitHub のアラート（> [!NOTE] など）。Swift が blockquote.alert と見出しの段落に書き換える。色は GitHub と同じ。 */
+.alert {
+  border-left: 3px solid var(--alert);
+  color: var(--text);
+}
+.alert-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 0.25em;
+  color: var(--alert);
+  font-weight: 600;
+}
+.alert-title::before {
+  content: "";
+  flex: none;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: var(--alert-icon) center / contain no-repeat;
+}
+.alert-note { --alert: #0969da; --alert-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.5' fill='none' stroke='black' stroke-width='1.5'/%3E%3Crect x='7.25' y='7' width='1.5' height='4.5' rx='.75'/%3E%3Ccircle cx='8' cy='4.75' r='1'/%3E%3C/svg%3E"); }
+.alert-tip { --alert: #1a7f37; --alert-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1.5a4.5 4.5 0 0 0-2.6 8.2c.4.3.6.7.6 1.1V11h4v-.2c0-.4.2-.8.6-1.1A4.5 4.5 0 0 0 8 1.5z' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Crect x='6' y='12.5' width='4' height='1.5' rx='.75'/%3E%3C/svg%3E"); }
+.alert-important { --alert: #8250df; --alert-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.5 2.5h11v8h-6l-3 3v-3h-2z' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Crect x='7.25' y='4' width='1.5' height='3.5' rx='.75'/%3E%3Ccircle cx='8' cy='9' r='.9'/%3E%3C/svg%3E"); }
+.alert-warning { --alert: #9a6700; --alert-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1.8 15 14H1z' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Crect x='7.25' y='6' width='1.5' height='4' rx='.75'/%3E%3Ccircle cx='8' cy='11.75' r='.9'/%3E%3C/svg%3E"); }
+.alert-caution { --alert: #d1242f; --alert-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.3 1.5h5.4l3.8 3.8v5.4l-3.8 3.8H5.3l-3.8-3.8V5.3z' fill='none' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Crect x='7.25' y='4.25' width='1.5' height='4.5' rx='.75'/%3E%3Ccircle cx='8' cy='11' r='.9'/%3E%3C/svg%3E"); }
+@media (prefers-color-scheme: dark) {
+  .alert-note { --alert: #4493f8; }
+  .alert-tip { --alert: #3fb950; }
+  .alert-important { --alert: #ab7df8; }
+  .alert-warning { --alert: #d29922; }
+  .alert-caution { --alert: #f85149; }
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--separator);
+  margin: 2em 0;
+}
+
+/* コード */
+code, pre {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.88em;
+}
+:not(pre) > code {
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+pre {
+  background: var(--code-bg);
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  line-height: 1.55;
+}
+pre code { font-size: 1em; }
+
+/* Mermaid の図（pre の中身を SVG に置き換える）。書き方の誤りで描けなかったときは理由とコードを出す。 */
+pre.mermaid-block:not(.mermaid-error) {
+  background: none;
+  padding: 0;
+  text-align: center;
+  white-space: normal;
+  line-height: normal;
+}
+pre.mermaid-block svg {
+  max-width: 100%;
+  height: auto;
+}
+.mermaid-message {
+  margin-bottom: 8px;
+  color: var(--del);
+  white-space: pre-wrap;  /* 誤りの位置を指す「^」の行をそのまま見せる */
+}
+
+/* コードブロックにマウスを載せたときに右上に出す言語名とコピーのボタン（本文の外に重ねた層） */
+#code-tools {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 11px/1 -apple-system, sans-serif;
+  color: var(--text-secondary);
+  -webkit-user-select: none;
+}
+#code-tools[hidden] { display: none; }
+#code-tools span:empty { display: none; }
+#code-tools button {
+  font: inherit;
+  color: var(--text);
+  padding: 3px 8px;
+  border: 1px solid var(--separator);
+  border-radius: 5px;
+  background: -apple-system-text-background;
+  cursor: pointer;
+}
+#code-tools button:hover { background: var(--fill); }
+
+/* コードの色付け（highlight.js のクラス）。GitHub に近い配色で、ライト／ダークを切り替える。 */
+:root {
+  --hl-keyword: #cf222e;
+  --hl-title: #8250df;
+  --hl-string: #0a3069;
+  --hl-number: #0550ae;
+  --hl-comment: #6e7781;
+  --hl-type: #953800;
+  --hl-tag: #116329;
+  --hl-add-bg: #dafbe1;
+  --hl-del-bg: #ffebe9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hl-keyword: #ff7b72;
+    --hl-title: #d2a8ff;
+    --hl-string: #a5d6ff;
+    --hl-number: #79c0ff;
+    --hl-comment: #8b949e;
+    --hl-type: #ffa657;
+    --hl-tag: #7ee787;
+    --hl-add-bg: rgba(46, 160, 67, 0.15);
+    --hl-del-bg: rgba(248, 81, 73, 0.15);
+  }
+}
+.hljs-keyword, .hljs-doctag, .hljs-template-tag, .hljs-template-variable, .hljs-variable.language_,
+.hljs-meta .hljs-keyword { color: var(--hl-keyword); }
+.hljs-title, .hljs-title.function_, .hljs-title.class_ { color: var(--hl-title); }
+.hljs-string, .hljs-regexp, .hljs-meta .hljs-string { color: var(--hl-string); }
+.hljs-number, .hljs-literal, .hljs-attr, .hljs-attribute, .hljs-symbol, .hljs-meta,
+.hljs-selector-attr, .hljs-selector-class, .hljs-selector-id, .hljs-operator { color: var(--hl-number); }
+.hljs-comment, .hljs-code, .hljs-formula { color: var(--hl-comment); }
+.hljs-built_in, .hljs-type, .hljs-variable, .hljs-params, .hljs-title.class_.inherited__ { color: var(--hl-type); }
+.hljs-tag, .hljs-name, .hljs-selector-tag, .hljs-selector-pseudo, .hljs-quote { color: var(--hl-tag); }
+.hljs-section { color: var(--hl-number); font-weight: 600; }
+.hljs-bullet { color: var(--hl-type); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+.hljs-addition { color: var(--hl-tag); background: var(--hl-add-bg); }
+.hljs-deletion { color: var(--hl-keyword); background: var(--hl-del-bg); }
+
+/* 表：表単体で横スクロールする */
+.table-wrap {
+  overflow-x: auto;
+}
+/* 日本語はどこでも改行できるため、自動レイアウトだと短いセルが「完／了」のように1文字幅まで縮む。
+   内容の幅で並べ、長いセルだけ 30em で折り返す（はみ出した分は表単体の横スクロール）。 */
+table {
+  width: max-content;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--separator);
+  border-radius: 8px;
+  font-size: 0.94em;
+  line-height: 1.6;
+}
+th, td {
+  padding: 6px 12px;
+  border-right: 1px solid var(--separator);
+  border-bottom: 1px solid var(--separator);
+  vertical-align: top;
+  overflow-wrap: normal;
+  max-width: 30em;
+}
+th:last-child, td:last-child { border-right: none; }
+tbody tr:last-child td { border-bottom: none; }
+th {
+  background: var(--fill);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+thead tr:first-child th:first-child { border-top-left-radius: 7px; }
+thead tr:first-child th:last-child { border-top-right-radius: 7px; }
+tbody tr:nth-child(even) td { background: var(--fill-subtle); }
+th[align="center"], td[align="center"] { text-align: center; }
+th[align="right"], td[align="right"] { text-align: right; }
+
+/* 画面の上端に重ねる表の見出し行（JS が複製を置く）。背景は本文の下地と同じ不透明な色にして、下の行を透かさない。 */
+#sticky-head {
+  position: fixed;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+}
+#sticky-head[hidden] { display: none; }
+#sticky-head table {
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  background: -apple-system-text-background;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+#sticky-head th {
+  border-bottom: none;
+  box-sizing: border-box;  /* JS が写す幅は枠線と余白を含む */
+}
+#sticky-head thead tr:first-child th { border-radius: 0; }
+
+/* 画像 */
+img {
+  max-width: 100%;
+  height: auto;
+}
+img.broken, img.remote-blocked {
+  display: inline-block;
+  min-width: 2em;
+  min-height: 1.5em;
+  padding: 2px 8px;
+  border: 1px dashed var(--separator);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 0.85em;
+}
+
+/* 変更の印：列の左の余白に細い線（未確認の変更は淡く、最新の更新は濃く）と削除の赤い三角を置く。
+   本文は最新の更新だけごく淡く塗る（今来た変更に目が行くように）。削除の位置には本文の幅で細い赤線も引く。
+   線と三角は #gutter 層に JS が置く。線の要素は当たり判定の幅で、見える線は ::after で描く。 */
+:root {
+  --chg: rgba(255, 149, 0, 0.45);
+  --chg-latest: rgb(255, 149, 0);
+  --chg-latest-bg: rgba(255, 149, 0, 0.08);
+  --del: rgb(255, 69, 58);
+  --del-line: rgba(255, 69, 58, 0.75);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --chg: rgba(255, 159, 10, 0.45);
+    --chg-latest: rgb(255, 159, 10);
+    --chg-latest-bg: rgba(255, 159, 10, 0.1);
+  }
+}
+.chg-latest { background-color: var(--chg-latest-bg); }
+/* セルはストライプ（tbody tr:nth-child(even) td）より詳細度を上げる */
+tbody tr td.chg-latest, thead tr th.chg-latest { background-color: var(--chg-latest-bg); }
+/* 削除の赤線は #gutter 層に JS が引く（要素の影や枠で描くと、高さが変わったり、角の丸みに沿って端が曲がったりする） */
+.cdline {
+  position: absolute;
+  height: 2px;
+  background: var(--del-line);
+  pointer-events: none;
+}
+.cb {
+  position: absolute;
+  width: 13px;  /* 当たり判定：線（3px）の左右に 5px ずつ */
+}
+.cb::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 3px;
+  bottom: 3px;
+  width: 3px;
+  border-radius: 1px;
+  background: var(--chg);
+}
+.cb-latest::after { background: var(--chg-latest); }
+.cd {
+  position: absolute;
+  width: 14px;
+  height: 12px;
+}
+/* 削除した行数：赤線の右端（本文の列の右の余白）に置く丸い印。
+   「−」は文字にするとフォントによって高さがずれるので、印の中心（＝赤線の中心）に図形で描く。 */
+.cdl {
+  position: absolute;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px 0 13px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--del);
+  color: white;
+  /* 行の高さを 14px にして数字を 1px 上げる（数字は下に寄って見え、「−」と高さがそろわないため） */
+  font: 600 10px/14px -apple-system, sans-serif;
+  text-align: center;
+  white-space: nowrap;
+  cursor: default;
+  -webkit-user-select: none;
+}
+.cdl::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 7px;
+  width: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: white;
+}
+.cd::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 2px;
+  border-left: 6px solid var(--del);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+
+@keyframes jump-flash {
+  from { outline-color: var(--accent); }
+  to { outline-color: transparent; }
+}
+.jump-flash {
+  outline: 2px solid transparent;
+  outline-offset: 4px;
+  border-radius: 4px;
+  animation: jump-flash 0.9s ease-out;
+}
+
+/* 付箋：しおりのリボン。本文の左の余白に重ねた層に置く（本文のレイアウトには影響しない） */
+#gutter {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+.bm {
+  position: absolute;
+  width: 21px;
+  height: 21px;
+  cursor: pointer;
+  -webkit-user-select: none;
+}
+.bm[hidden] { display: none; }
+.bm::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  width: 9px;
+  height: 13px;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 73%, 0 100%);
+  background: var(--accent);
+}
+.bm-pin:hover::after { opacity: 0.6; }
+.bm-hover::after { background: var(--text-secondary); opacity: 0.35; }
+.bm-hover:hover::after { opacity: 0.85; }
+
+/* 変更の線・削除の三角にマウスを載せると出る吹き出し（変更前の内容・削除された行） */
+#removed-pop {
+  position: absolute;
+  z-index: 3;
+  max-width: min(36em, calc(100vw - 48px));
+  max-height: 50vh;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 8px 12px 10px;
+  background: Canvas;
+  color: CanvasText;
+  border: 1px solid var(--separator);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+#removed-pop[hidden] { display: none; }
+.rp-title {
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+.rp-title:only-child { margin-bottom: 0; }
+#removed-pop pre {
+  margin: 0;
+  padding: 0 0 0 8px;
+  background: none;
+  border-radius: 0;
+  border-left: 3px solid var(--chg-latest);
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+#removed-pop.rp-del pre { border-left-color: var(--del); }
+
+/* ルーラー：右端に文書全体の変更の位置を並べる（検索中は一致の位置も重ねる）。クリックの当たり判定は 10px。 */
+#ruler {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  z-index: 2;
+}
+#ruler:empty { display: none; }
+.rk {
+  position: absolute;
+  right: 3px;
+  width: 3px;
+  border-radius: 1px;
+}
+.rk-chg { background: var(--chg); }
+.rk-chg-latest { background: var(--chg-latest); }
+.rk-del { background: var(--del); }
+.rk-search { background: rgba(255, 204, 0, 0.9); }
+.rk-current { background: var(--chg-latest); }
+
+/* 検索（CSS Custom Highlight API） */
+::highlight(search) {
+  background-color: rgba(255, 214, 10, 0.45);
+  color: inherit;
+}
+::highlight(search-current) {
+  background-color: rgba(255, 149, 0, 0.9);
+  color: black;
+}
+
+/* フロントマター（YAML）：折りたたみ、開くと項目名と値の2列で見せる */
+.front-matter {
+  border: 1px solid var(--separator);
+  border-radius: 8px;
+  padding: 0 14px;
+  font-size: 0.88em;
+  line-height: 1.6;
+}
+.front-matter > summary {
+  padding: 6px 0;
+  color: var(--text-secondary);
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-user-select: none;
+}
+.front-matter .fm-keys {
+  margin-left: 0.8em;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-weight: normal;
+  opacity: 0.8;
+}
+.front-matter[open] .fm-keys { display: none; }
+.front-matter dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 2px 0 10px;
+}
+.front-matter dt {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text-secondary);
+}
+.front-matter dd {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+/* 印刷・PDF：画面用に重ねている印やボタンは出さず、本文だけを紙の幅で組む */
+@media print {
+  body { font-size: 10.5pt; }
+  #content {
+    max-width: none;
+    padding: 0;
+    contain: none;
+  }
+  #gutter, #ruler, #sticky-head, #code-tools, #removed-pop { display: none !important; }
+  .chg-latest, tbody tr td.chg-latest, thead tr th.chg-latest { background-color: transparent; }
+  .jump-flash { animation: none; outline: none; }
+  pre { white-space: pre-wrap; overflow: visible; }
+  .table-wrap { overflow: visible; }
+  h1, h2, h3, h4, h5, h6 { break-after: avoid; }
+  pre, blockquote, tr, img, .mermaid-block { break-inside: avoid; }
+}
+
+/* 脚注 */
+.footnotes {
+  margin-top: 2.5em;
+  padding-top: 1em;
+  border-top: 1px solid var(--separator);
+  font-size: 0.9em;
+  color: var(--text-secondary);
+}

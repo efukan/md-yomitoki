@@ -1,0 +1,108 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "linear-gradient": [
+          "srgb:1.00000,0.98039,0.94118,1.00000",
+          "srgb:0.94902,0.90588,0.80784,1.00000"
+        ]
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "srgb:0.23137,0.20000,0.17255,1.00000",
+          "srgb:0.14902,0.12941,0.11373,1.00000"
+        ]
+      }
+    }
+  ],
+  "groups": [
+    {
+      "name": "Ribbon",
+      "layers": [
+        {
+          "image-name": "ribbon.svg",
+          "name": "ribbon"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    },
+    {
+      "name": "Page",
+      "layers": [
+        {
+          "image-name": "page-ink.svg",
+          "name": "page-ink",
+          "fill-specializations": [
+            {
+              "appearance": "dark",
+              "value": {
+                "solid": "srgb:0.94902,0.90588,0.80784,1.00000"
+              }
+            }
+          ]
+        },
+        {
+          "image-name": "page-text.svg",
+          "name": "page-text",
+          "fill-specializations": [
+            {
+              "appearance": "dark",
+              "value": {
+                "solid": "srgb:0.63922,0.55294,0.46667,1.00000"
+              }
+            }
+          ]
+        },
+        {
+          "image-name": "page-mark.svg",
+          "name": "page-mark"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.15
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      },
+      "specular": false
+    },
+    {
+      "name": "Sidebar",
+      "layers": [
+        {
+          "image-name": "sidebar-rows.svg",
+          "name": "sidebar-rows"
+        },
+        {
+          "image-name": "sidebar.svg",
+          "name": "sidebar"
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

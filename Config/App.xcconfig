@@ -1,0 +1,24 @@
+// アプリの名称・識別子・バージョンはこのファイルだけで管理する。
+// Info.plist と Makefile はここの値を参照する。
+
+APP_DISPLAY_NAME = MDよみとき
+PRODUCT_NAME = MDYomitoki
+PRODUCT_BUNDLE_IDENTIFIER = jp.efukan.mdyomitoki
+APP_COPYRIGHT = © 2026 efukan
+
+// 公開先（GitHub の owner/リポジトリ）。自動アップデートの更新情報（Info.plist の SUFeedURL）と make publish が使う。
+GITHUB_REPOSITORY = efukan/md-yomitoki
+
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+MACOSX_DEPLOYMENT_TARGET = 15.0
+
+// 署名。ad-hoc 署名（"-"）だとビルドのたびに署名が変わり、プライバシー保護（TCC）の
+// 「書類フォルダへのアクセス」許可がリセットされるため、Apple Development 証明書で署名する。
+CODE_SIGN_IDENTITY = Apple Development
+DEVELOPMENT_TEAM = 4NJNS5T7UM
+
+// 配布（make release）は Developer ID で署名し、公証に必要な安全なタイムスタンプを付ける。
+CODE_SIGN_IDENTITY[config=Release] = Developer ID Application
+OTHER_CODE_SIGN_FLAGS[config=Release] = --timestamp
