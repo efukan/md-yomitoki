@@ -41,6 +41,7 @@ targets:
       - package: swift-cmark
         product: cmark-gfm-extensions
       - package: Sparkle
+      - target: MDYomitokiQuickLook  # Contents/PlugIns に入れる
     settings:
       base:
         INFOPLIST_FILE: MDYomitoki/Info.plist
@@ -61,6 +62,34 @@ targets:
             mkdir -p "$dir"
             printf '"CFBundleDisplayName" = "%s";\n"CFBundleName" = "%s";\n' "$APP_DISPLAY_NAME" "$APP_DISPLAY_NAME" > "$dir/InfoPlist.strings"
           done
+
+  # Finder のスペースキー（Quick Look）で Markdown を見せる機能拡張。Markdown の変換とファイルの読み込みはアプリと共通。
+  MDYomitokiQuickLook:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: MDYomitokiQuickLook
+        excludes:
+          - Info.plist
+          - QuickLook.entitlements
+      - path: MDYomitoki/Markdown.swift
+      - path: MDYomitoki/TextFile.swift
+      - path: MDYomitoki/Resources/preview.css
+        buildPhase: resources
+      - path: MDYomitoki/Resources/highlight.min.js
+        buildPhase: resources
+    dependencies:
+      - package: swift-cmark
+        product: cmark-gfm
+      - package: swift-cmark
+        product: cmark-gfm-extensions
+    settings:
+      base:
+        INFOPLIST_FILE: MDYomitokiQuickLook/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_NAME: MDYomitokiQuickLook
+        PRODUCT_BUNDLE_IDENTIFIER: $(PRODUCT_BUNDLE_IDENTIFIER).quicklook
+        CODE_SIGN_ENTITLEMENTS: MDYomitokiQuickLook/QuickLook.entitlements
 
   MDYomitokiTests:
     type: bundle.unit-test

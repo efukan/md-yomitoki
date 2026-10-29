@@ -187,6 +187,17 @@ make dmg SIGN="Apple Development"   # 公証の手前まで（証明書を変え
 - 前回のタブの復元（`OpenFilesSession`、`AppSettings.restoreOpenFiles`、既定でオン）：ウィンドウごとのタブの並び・選んでいたタブ・ウィンドウの位置と大きさ・一番手前のファイルを、ファイルを開くたび・閉じ終わった時・終了する時に、開いているものがあれば記録する（閉じたタブは記録から外れる）。全部閉じた時は記録し直さないので、全部閉じる直前の並びが残る（閉じるボタンはタブをまとめて閉じるので、閉じ終わってから判断する）。起動した時と、ウィンドウを全部閉じてから Dock のアイコンをクリックした時（`applicationShouldHandleReopen`）に同じ並びで開き直す。消えたファイルは黙って飛ばす（`restorable`）。Finder からファイルを開いて起動した時は復元しない。何も開けなければ最近使ったファイルの一覧を出す。
 - 「ファイル」メニューの「最近使ったファイル」サブメニュー（名前 — プロジェクト、「履歴を消去（ピン留めは残す）」）。
 
+### Quick Look（機能拡張：`MDYomitokiQuickLook`）
+- Finder のスペースキーで Markdown を見せる機能拡張（`com.apple.quicklook.preview`）。アプリの `Contents/PlugIns` に入る。対象は `net.daringfireball.markdown`。
+- HTML を作って渡す方式（`QLPreviewProvider`・`QLIsDataBasedPreview`）。表示は macOS がする。WebView を自分で持つ方式より軽く、壊れにくい。
+  - Markdown の変換（`Markdown.swift`）・ファイルの読み込み（`TextFile.swift`：文字コードの判別・大きさの上限）・見た目（`preview.css`）はアプリと共通（project.yml で同じファイルを両方のターゲットに入れる）。
+  - コードの色付けは、アプリと同じ `highlight.min.js` を JavaScriptCore で動かして HTML にしておく（言語が書かれたものだけ。合わせて 300KB まで。機能拡張の中では JIT が使えず遅いため）。Mermaid の図は描かない（コードのまま）。
+  - Sandbox が必須（`QuickLook.entitlements`）。読めるのは渡されたファイルだけで、ネットにもつながない（見ただけで外に通信しない）ので、画像は「画像：代替テキスト」の枠にする。
+  - Content-Security-Policy でスクリプト・外部の読み込みを止め、文書の生 HTML の meta・base・link・object・embed・form は文字にする。
+  - 描くのは先頭の 1MB まで（Quick Look には時間の制限がある）。切ったときは冒頭にその旨を出す。10MB を超えるファイルは読まない（Quick Look の既定の表示になる）。
+- 別のアプリ（MDHero など）も Markdown の Quick Look を持っていると、そちらが使われることがある。「システム設定」→「一般」→「ログイン項目と機能拡張」→「Quick Look」で切り替える。登録の状況は `pluginkit -m -v -p com.apple.quicklook.preview`。開発中のビルドの機能拡張は、`make build` の後に起動するか `pluginkit -a <appex>` で登録される。
+- 配布：Xcode が Developer ID・Hardened Runtime・タイムスタンプで署名する（xcconfig がすべてのターゲットに効く）。`make archive` が機能拡張の Hardened Runtime も確かめる。
+
 ## ファイル構成
 
 ```
@@ -208,10 +219,12 @@ MDYomitoki/
   RecentFiles.swift    # 最近開いたファイル（履歴・プロジェクト名・クイックスイッチャー）
   AppSettings.swift    # アプリ全体の設定（UserDefaults）
   Updater.swift        # 自動アップデート（Sparkle）
+  TextFile.swift       # ファイルの読み込み（文字コード・上限。Quick Look と共通）
   Info.plist
   AppIcon.icon/        # アプリアイコン（Icon Composer 形式。make_appicon.py で生成）
   Resources/preview.html, preview.css, preview.js
   Resources/Credits.html # 「このアプリについて」に出すライセンス表示
+MDYomitokiQuickLook/   # Quick Look の機能拡張（PreviewProvider.swift・Info.plist・QuickLook.entitlements）
 MDYomitokiTests/
 ReleaseNotes/          # 版ごとのリリースノート（<版>.md。アップデートの画面と GitHub の Release に出る）
 Design/AppIcon/make_appicon.py  # アイコンの生成スクリプト（AppIcon.icon の正）

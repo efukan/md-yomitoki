@@ -60,7 +60,10 @@ archive: gen
 	codesign -f -s "$(SIGN)" -o runtime --timestamp "$(SPARKLE_FW)"
 	codesign -f -s "$(SIGN)" -o runtime --timestamp --preserve-metadata=entitlements "$(RELEASE_APP)"
 	codesign --verify --deep --strict "$(RELEASE_APP)"
-	codesign -dv "$(RELEASE_APP)" 2>&1 | grep -q 'flags=.*runtime' || { echo "Hardened Runtime が付いていません"; exit 1; }
+	@# アプリと中の Quick Look の機能拡張（Xcode が Developer ID・Hardened Runtime・タイムスタンプで署名する）を確かめる
+	for x in "$(RELEASE_APP)" "$(RELEASE_APP)"/Contents/PlugIns/*.appex; do \
+		codesign -dv "$$x" 2>&1 | grep -q 'flags=.*runtime' || { echo "Hardened Runtime が付いていません：$$x"; exit 1; }; \
+	done
 
 # dmg は dmgbuild で作る（背景・アイコンの並び・ウィンドウの大きさ・ディスクのアイコン。設定は Config/dmg_settings.py）。
 # 版を固定して build/ の中の専用の Python 環境に入れる（make clean で消えたら次の make dmg で入れ直す）。
