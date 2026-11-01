@@ -21,6 +21,7 @@ struct PreviewView: NSViewRepresentable {
         webView.isHidden = model.mode != .preview
         context.coordinator.setRemoteImages(AppSettings.shared.loadRemoteImages)
         context.coordinator.setLayout(scale: AppSettings.shared.textScale, width: AppSettings.shared.contentWidth.css)
+        context.coordinator.setLineNumbers(AppSettings.shared.showLineNumbers)
         // 開いた直後、描画ができるまでは何も渡さない（空の文書を描いて位置の復元を済ませてしまわないように）
         if model.hasRendered { context.coordinator.update(html: model.rendered.html, marks: model.marks) }
     }
@@ -47,6 +48,7 @@ struct PreviewView: NSViewRepresentable {
         private var shellLoadPending = false
         /// 本文の列の最大幅（CSS の値）
         private var contentWidth = AppSettings.shared.contentWidth.css
+        private var showsLineNumbers = AppSettings.shared.showLineNumbers
         private var appearanceBeforePrinting: NSAppearance?
 
         init(model: DocumentModel) {
@@ -90,6 +92,13 @@ struct PreviewView: NSViewRepresentable {
             contentWidth = width
             guard isReady else { return }
             callJS("setContentWidth(width)", ["width": width])
+        }
+
+        func setLineNumbers(_ show: Bool) {
+            guard show != showsLineNumbers else { return }
+            showsLineNumbers = show
+            guard isReady else { return }
+            callJS("setLineNumbers(show)", ["show": show])
         }
 
         /// JS の src の退避だけでは srcset・CSS の背景・SVG の image などを止めきれないので、
@@ -245,9 +254,10 @@ struct PreviewView: NSViewRepresentable {
 
         private func renderNow() {
             guard isReady, let html else { return }
-            var body = "allowRemoteImages = allow; setContentWidth(width); render(html, base, marks)"
+            var body = "allowRemoteImages = allow; setContentWidth(width); setLineNumbers(lineNumbers); render(html, base, marks)"
             var arguments: [String: Any] = [
                 "html": html, "base": baseURL, "marks": marks.jsValue, "allow": allowRemoteImages, "width": contentWidth,
+                "lineNumbers": showsLineNumbers,
             ]
             if needsScrollRestore {
                 needsScrollRestore = false

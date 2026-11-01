@@ -35,6 +35,15 @@ function setContentWidth(width) {
   document.documentElement.style.setProperty('--content-width', width);
 }
 
+// 行番号の表示。本文の列の左の余白が広がるので、見ていた位置を保って印を置き直す。
+function setLineNumbers(show) {
+  if (show === lineNumbersOn) return;
+  lineNumbersOn = show;
+  document.documentElement.classList.toggle('line-numbers', show);
+  restoreAnchor(liveAnchor);
+  placeOverlays();
+}
+
 // line〜last 行の範囲のうち ratio の位置が画面上部に来るようにスクロールする。
 // プレビュー自身の位置（要素の開始行〜終了行と要素内の割合）も、エディタの位置（1 行とその行内の割合）も同じ式で扱える。
 function scrollToLine(line, ratio = 0, last = line) {
@@ -237,6 +246,7 @@ window.addEventListener('scroll', () => {
   scheduleReport();
   scheduleHover();
   scheduleStickyHead();
+  scheduleLineNumbers();
 }, { passive: true });
 
 // 画像の読み込み完了やウィンドウ幅の変化で高さが変わっても、見ている位置を保つ。余白の印とルーラーも置き直す。
@@ -254,6 +264,7 @@ window.addEventListener('resize', () => {
 function placeOverlays() {
   placeBookmarks();
   placeChangeMarks();
+  placeLineNumbers();
   scheduleRuler();
   stickyTable = null;  // 列の幅が変わっているかもしれないので作り直す
   scheduleStickyHead();
@@ -456,6 +467,61 @@ gutter.addEventListener('click', (event) => {
   const lines = bookmarkLines.filter((line) => targetForLine(line) === el);
   post({ type: 'toggleBookmark', lines: lines.length > 0 ? lines : [startLine(el)] });
 });
+
+// MARK: - 行番号（付箋の印の左に、各要素の開始行を出す）
+
+// 文書全体に置くと大きな文書で重いので、画面の前後の分だけ置き、スクロールしたら置き直す。
+const LINE_NUMBER_RIGHT = 30;    // 番号の右端から本文の列の左端までの距離（付箋の印の左）
+const LINE_NUMBER_WIDTH = 40;
+const LINE_NUMBER_HEIGHT = 14;
+const LINE_NUMBER_MARGIN = 800;  // 画面の上下に余分に置く高さ
+const lineNumberLayer = document.createElement('div');
+gutter.appendChild(lineNumberLayer);
+let lineNumbersOn = false;
+let lineNumberFrame = 0;
+
+function scheduleLineNumbers() {
+  if (lineNumbersOn && !lineNumberFrame) lineNumberFrame = requestAnimationFrame(placeLineNumbers);
+}
+
+function placeLineNumbers() {
+  cancelAnimationFrame(lineNumberFrame);
+  lineNumberFrame = 0;
+  if (!lineNumbersOn) {
+    lineNumberLayer.replaceChildren();
+    return;
+  }
+  // 要素の top は文書順に単調なので、画面より上の要素は二分探索で飛ばす
+  let lo = 0, hi = targets.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (targets[mid].getBoundingClientRect().top < -LINE_NUMBER_MARGIN) lo = mid + 1;
+    else hi = mid;
+  }
+  const left = columnLeft() + window.scrollX - LINE_NUMBER_RIGHT - LINE_NUMBER_WIDTH;
+  const bottom = window.innerHeight + LINE_NUMBER_MARGIN;
+  const marks = [];
+  let lastLine = 0, lastTop = -Infinity;
+  for (let i = lo; i < targets.length; i++) {
+    const el = targets[i];
+    const rect = el.getBoundingClientRect();
+    if (rect.top > bottom) break;
+    if (rect.height === 0) continue;  // 閉じた details の中など
+    const line = startLine(el);
+    const top = window.scrollY + firstLineMiddle(el) - LINE_NUMBER_HEIGHT / 2;
+    // 同じ行の入れ子（li と p）と、番号が重なるほど近い要素は最初の1つだけ
+    if (line === lastLine || top - lastTop < LINE_NUMBER_HEIGHT) continue;
+    lastLine = line;
+    lastTop = top;
+    const mark = document.createElement('div');
+    mark.className = 'ln';
+    mark.textContent = line;
+    mark.style.left = `${left}px`;
+    mark.style.top = `${top}px`;
+    marks.push(mark);
+  }
+  lineNumberLayer.replaceChildren(...marks);
+}
 
 // MARK: - 変更の印（本文の列の左の余白の細い線と、削除の三角）
 

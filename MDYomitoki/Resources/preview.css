@@ -51,7 +51,7 @@ body {
 #content {
   max-width: var(--content-width, 52em);  /* 「表示」メニューの「本文の幅」 */
   margin: 0 auto;
-  padding: 28px 40px 96px;
+  padding: 28px 40px 96px var(--content-left, 40px);
   /* 文書の生 HTML の position: fixed を本文の中に閉じ込め、画面全体を覆う偽の表示やリンクを置かせない */
   contain: paint;
 }
@@ -433,6 +433,18 @@ tbody tr td.chg-latest, thead tr th.chg-latest { background-color: var(--chg-lat
   -webkit-user-select: none;
 }
 .bm[hidden] { display: none; }
+/* 行番号：付箋の印の左に #gutter 層に JS が置く。出す間は本文の列の左の余白を広げる */
+html.line-numbers { --content-left: 72px; }
+.ln {
+  position: absolute;
+  width: 40px;
+  color: -apple-system-tertiary-label;
+  font: 10px/14px -apple-system, sans-serif;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  pointer-events: none;
+  -webkit-user-select: none;
+}
 .bm::after {
   content: "";
   position: absolute;

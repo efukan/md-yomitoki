@@ -15,6 +15,7 @@ struct EditorView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.update(text: model.text, marks: model.marks, isActive: model.mode == .editor)
         context.coordinator.setScale(AppSettings.shared.textScale)
+        context.coordinator.setLineNumbers(AppSettings.shared.showLineNumbers)
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
@@ -35,6 +36,7 @@ struct EditorView: NSViewRepresentable {
         /// 先頭のフロントマターの行数。変わったら全体を整形し直す（中の文字の編集では整形し直さない）。
         private var frontMatterLines: Int?
         private var didInitialScroll = false
+        private var showsLineNumbers = false
         private var decorateTask: Task<Void, Never>?
         private var scrollReportTask: Task<Void, Never>?
         private var selectionCountTask: Task<Void, Never>?
@@ -69,7 +71,7 @@ struct EditorView: NSViewRepresentable {
             textView.isHorizontallyResizable = false
             textView.autoresizingMask = [.width]
             textView.textContainer?.widthTracksTextView = true
-            textView.textContainerInset = NSSize(width: 28, height: 24)
+            textView.textContainerInset = NSSize(width: EditorStyle.textInset, height: EditorStyle.textInsetTop)
             textView.drawsBackground = false
             textView.isRichText = false
             textView.importsGraphics = false
@@ -107,6 +109,29 @@ struct EditorView: NSViewRepresentable {
             let anchor = visibleAnchor()
             scrollView.magnification = scale
             if let anchor { restoreAnchor(index: anchor.index, offset: anchor.offset) }
+        }
+
+        func setLineNumbers(_ show: Bool) {
+            guard show != showsLineNumbers else { return }
+            showsLineNumbers = show
+            marksView.showsLineNumbers = show
+            refreshLineNumbers()
+        }
+
+        /// 番号の位置を今の本文に合わせ、番号の欄の分だけ本文の余白を広げる（幅が変わるのは桁が増減した時だけ）。
+        /// 入力のたびに呼ぶ（decorate を待つと、改行してから番号が出るまで遅れて見える）。
+        private func refreshLineNumbers() {
+            var inset = EditorStyle.textInset
+            if showsLineNumbers {
+                let starts = lineStarts(textView.string as NSString)
+                marksView.setLineStarts(starts)
+                inset = EditorStyle.textInset(lineCount: starts.count)
+            }
+            guard textView.textContainerInset.width != inset else { return }
+            let anchor = visibleAnchor()
+            textView.textContainerInset = NSSize(width: inset, height: EditorStyle.textInsetTop)
+            if let anchor { restoreAnchor(index: anchor.index, offset: anchor.offset) }
+            marksView.needsDisplay = true
         }
 
         func update(text: String, marks: PreviewMarks, isActive: Bool) {
@@ -167,6 +192,7 @@ struct EditorView: NSViewRepresentable {
                     : anchor.index >= NSMaxRange(replaced) ? anchor.index + delta : replaced.location
                 restoreAnchor(index: index, offset: anchor.offset)
             }
+            if showsLineNumbers { refreshLineNumbers() }
             scheduleDecorate(after: 0)
         }
 
@@ -214,6 +240,7 @@ struct EditorView: NSViewRepresentable {
 
             syncedText = storage.string
             model.editorTextDidChange(syncedText)
+            if showsLineNumbers { refreshLineNumbers() }
             scheduleDecorate(after: 200)
         }
 
@@ -506,12 +533,15 @@ struct EditorView: NSViewRepresentable {
     }
 }
 
-/// エディタの本文に重ねて、付箋・変更の線・削除の印（赤線・三角・行数）を描く層。
+/// エディタの本文に重ねて、行番号・付箋・変更の線・削除の印（赤線・三角・行数）を描く層。
 /// NSTextView 自身の draw では文字の領域の外が切り取られるため、子ビューにする。クリックは素通しし、
 /// 変更の線・削除の三角と行数にマウスを載せたときだけ、変更前の内容（削除された行）を吹き出しで見せる。
 /// 印の位置はレイアウトから求めるので、描く範囲（見えている範囲）の分だけ調べる。
 final class EditorMarksView: NSView {
     weak var textView: NSTextView?
+    var showsLineNumbers = false {
+        didSet { needsDisplay = true }
+    }
     /// 付箋のある行の先頭の文字位置
     private var bookmarkIndexes: [Int] = []
     private var marks = PreviewMarks()
@@ -548,12 +578,19 @@ final class EditorMarksView: NSView {
         needsDisplay = true
     }
 
+    func setLineStarts(_ lineStarts: [Int]) {
+        self.lineStarts = lineStarts
+        needsDisplay = true
+    }
+
     // MARK: 描画
 
     override func draw(_ dirtyRect: NSRect) {
         guard let textView, let layoutManager = textView.layoutManager else { return }
         let length = (textView.string as NSString).length
         let textLeft = textView.textContainerOrigin.x + (textView.textContainer?.lineFragmentPadding ?? 0)
+
+        if showsLineNumbers { drawLineNumbers(in: dirtyRect, right: textLeft - EditorStyle.lineNumberRight) }
 
         EditorStyle.bookmark.setFill()
         for index in bookmarkIndexes {
@@ -584,6 +621,34 @@ final class EditorMarksView: NSView {
                 triangle.fill()
                 drawCountBadge(count, at: badgeRect(count, y: y, textRight: textRight))
             }
+        }
+    }
+
+    /// rect の高さにある行の番号を、付箋の印の左に右寄せで描く（折り返した行は1段目だけ）。
+    private func drawLineNumbers(in rect: NSRect, right: CGFloat) {
+        guard let textView, let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
+        let length = (textView.string as NSString).length
+        let origin = textView.textContainerOrigin
+        let area = NSRect(x: 0, y: rect.minY - origin.y, width: container.size.width, height: rect.height)
+        let visible = layoutManager.characterRange(
+            forGlyphRange: layoutManager.glyphRange(forBoundingRect: area, in: container), actualGlyphRange: nil
+        )
+        // 見えている最初の文字を含む行を二分探索する
+        var lo = 0, hi = lineStarts.count - 1
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if lineStarts[mid] <= visible.location { lo = mid } else { hi = mid - 1 }
+        }
+        for line in lo..<lineStarts.count {
+            let start = lineStarts[line]
+            guard start <= NSMaxRange(visible), start <= length else { break }
+            let fragment = start < length
+                ? layoutManager.lineFragmentRect(forGlyphAt: layoutManager.glyphIndexForCharacter(at: start), effectiveRange: nil)
+                : layoutManager.extraLineFragmentRect
+            guard !fragment.isEmpty else { continue }
+            let text = NSAttributedString(string: "\(line + 1)", attributes: EditorStyle.lineNumberAttributes)
+            let size = text.size()
+            text.draw(at: NSPoint(x: right - size.width, y: fragment.midY + origin.y - size.height / 2))
         }
     }
 
@@ -808,6 +873,20 @@ enum EditorStyle {
     static let searchMatch = NSColor.systemYellow.withAlphaComponent(0.45)
     static let searchCurrent = NSColor.systemOrange.withAlphaComponent(0.85)
     static let bookmark = NSColor.controlAccentColor
+    static let textInset: CGFloat = 28
+    static let textInsetTop: CGFloat = 24
+    static let lineNumberAttributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.tertiaryLabelColor,
+    ]
+    /// 行番号の右端から本文の左端までの距離（付箋の印の左）
+    static let lineNumberRight: CGFloat = 24
+
+    /// 行番号を出す時の本文の余白（3桁までは同じ幅。文書が伸びても本文の折り返しが変わらないように）
+    static func textInset(lineCount: Int) -> CGFloat {
+        let digitWidth = ("0" as NSString).size(withAttributes: lineNumberAttributes).width
+        // 左端の 8pt ＋番号の幅＋番号から本文までの距離。本文の左端は余白より lineFragmentPadding（5pt）右にある
+        return (8 + CGFloat(max(3, String(lineCount).count)) * digitWidth + lineNumberRight - 5).rounded(.up)
+    }
 
     /// 付箋の形（下端に切れ込みのあるしおりのリボン）。座標は上が小さい（反転した座標系）。
     static func bookmarkPath(in rect: NSRect) -> NSBezierPath {

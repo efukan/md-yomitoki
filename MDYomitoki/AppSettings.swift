@@ -44,6 +44,11 @@ final class AppSettings {
         didSet { UserDefaults.standard.set(contentWidth.rawValue, forKey: "contentWidth") }
     }
 
+    /// 左の余白に元のファイルの行番号を出すか（プレビューとエディタ。全ウィンドウ共通）
+    var showLineNumbers: Bool {
+        didSet { UserDefaults.standard.set(showLineNumbers, forKey: "showLineNumbers") }
+    }
+
     /// ⌘+ / ⌘− で切り替える倍率の段階
     static let textScales: [Double] = [0.75, 0.85, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2]
 
@@ -66,6 +71,7 @@ final class AppSettings {
         let scale = UserDefaults.standard.double(forKey: "textScale")
         textScale = Self.textScales.contains(scale) ? scale : 1
         contentWidth = ContentWidth(rawValue: UserDefaults.standard.string(forKey: "contentWidth") ?? "") ?? .standard
+        showLineNumbers = UserDefaults.standard.bool(forKey: "showLineNumbers")
     }
 }
 

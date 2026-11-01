@@ -76,7 +76,7 @@ make dmg SIGN="Apple Development"   # 公証の手前まで（証明書を変え
 - `.icon` はサイズごとに別の絵を持てないので、16・32px も同じ絵を縮めて描かれる。
 
 ### ウィンドウ・起動導線
-- SwiftUI `App` は `Settings` シーンとメニューコマンドだけを担当する。設定ウィンドウ（⌘,、`SettingsView`）は `AppSettings` をまとめて見せるだけで、どの設定もメニューやツールバーからも変えられる（表示：文字の大きさ・本文の幅・リモート画像、変更の比較：新しく開いたファイルの基準）。ドキュメントウィンドウは **AppDelegate が AppKit の `NSWindow` ＋ `NSHostingController`** で生成・管理する（DocumentGroup/NSDocument は外部変更監視とぶつかるため使わない）。
+- SwiftUI `App` は `Settings` シーンとメニューコマンドだけを担当する。設定ウィンドウ（⌘,、`SettingsView`）は `AppSettings` をまとめて見せるだけで、どの設定もメニューやツールバーからも変えられる（表示：文字の大きさ・本文の幅・行番号・リモート画像、変更の比較：新しく開いたファイルの基準）。ドキュメントウィンドウは **AppDelegate が AppKit の `NSWindow` ＋ `NSHostingController`** で生成・管理する（DocumentGroup/NSDocument は外部変更監視とぶつかるため使わない）。
 - 複数ファイルは OS 標準のウィンドウタブで扱う（`tabbingMode = .preferred`、前面ウィンドウに `addTabbedWindow`）。タブの「＋」は `newWindowForTab:` で「最近使ったファイル」のパネルを出す。
 - 閉じる（⌘W）・ウインドウを閉じる（⇧⌘W、タブごと）・閉じたタブを開き直す（⇧⌘T、閉じた順に新しいものから。終了すると忘れる）は「ファイル」メニュー（標準の「閉じる」は置き換えた保存の欄に入っているので自前で用意する）。
 - 外観（設定ウィンドウ：端末に合わせる・ライト・ダーク、`AppSettings.appearance`）は `NSApp.appearance` で全体に効かせる（プレビューの WebView・Mermaid も追従する）。
@@ -98,6 +98,9 @@ make dmg SIGN="Apple Development"   # 公証の手前まで（証明書を変え
 - 表は Swift 側で `<div class="table-wrap">` で包み、表単体で横スクロールできるようにする（角丸枠・ヘッダー背景・ストライプ）。
   - 見出し行の固定：`.table-wrap` が横スクロールの入れ物なので `position: sticky` は画面に効かない。見出し行が画面の上に隠れた表があれば、JS が見出し行の複製（列の幅を写す・`box-sizing: border-box`）を画面の上端に重ね（`#sticky-head`）、表の横スクロールに合わせて動かし、表の終わりで押し上げる。表の行へ移動するときは見出し行の高さだけ下に出す。
 - 文字の大きさ（「表示」の拡大 ⌘+／縮小 ⌘−／実際のサイズ ⌘0、`AppSettings.textScale`、全ウィンドウ共通）：プレビューは `WKWebView.pageZoom`、エディタは `NSScrollView.magnification`。100% 以外のときはステータスバーに倍率を出し、クリックで戻す。本文の幅（狭い 40em・標準 52em・広い 68em・ウインドウの幅、`AppSettings.contentWidth`）はプレビューの CSS 変数 `--content-width`。どちらも見ていた位置を保つ（JS の resize・ResizeObserver、エディタは表示位置の文字を基準に戻す）。
+- 行番号（「表示」の「行番号を表示」・設定ウィンドウ、`AppSettings.showLineNumbers`、全ウィンドウ共通、既定はオフ）：元のファイルの行番号を、左の余白の付箋の印のさらに左に出す。出す間は本文の余白を広げる。
+  - プレビュー：`#gutter` 層に、付箋を付けられる要素（`targets`）の開始行を置く（同じ行の入れ子は1つだけ。段落の途中の行やコードブロックの中の行には出ない）。文書全体に置くと大きな文書で重いので、画面の前後 800px の分だけ置いてスクロールで置き直す。本文の外の層なので、文字のコピーと印刷には入らない。
+  - エディタ：`EditorMarksView` が見えている行だけ描く（折り返した行は1段目だけ）。行の先頭の位置は入力のたびに作り直す（decorate の 200ms を待つと、改行してから番号が出るまで遅れて見える）。余白は NSTextView の仕様で左右同じになる。幅は桁数で決まり、4桁になるまでは変わらない（文書が伸びるたびに本文の折り返しが変わらないように）。
 - コードブロック：言語が書かれたもの（`language-xxx`）だけ highlight.js で色付けする（推測はしない）。新しく入ったブロックだけに行い、比較は色付け前の HTML で行う。差分更新で行番号を写すときは行番号を持つ要素どうしで対応させる（色付けの span で数がずれないように）。マウスを載せると右上に言語名とコピーのボタン（`#code-tools`、本文の外に重ねる。コピーは Swift が NSPasteboard に書く）。配色は GitHub に近い自前の CSS（ライト／ダーク）。
 - Mermaid（` ```mermaid `）：図のある文書を開いた時に初めて `mermaid.min.js` を読み込む（約 5.5MB）。pre 要素は残して中身を SVG に置き換える（差分更新で pre ごと使い回すので、変わらない図は描き直さない）。`securityLevel: 'strict'`、配色はライト／ダークに合わせ、見た目が変わったら描き直す。描けなければ理由と元のコードを出す。コピーのボタンは元のコードを写す。描くのは1つずつ順番に（`mermaidQueue`）。
 - 数式（GitHub と同じ書き方）：

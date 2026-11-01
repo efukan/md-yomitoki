@@ -65,6 +65,7 @@ struct MDYomitokiApp: App {
                     .keyboardShortcut("s", modifiers: [.control, .command])
                     Button("付箋を付ける／外す") { appDelegate.activeModel?.toggleBookmarkAtCurrentPosition() }
                         .keyboardShortcut("d")
+                    LineNumbersToggle()
                     RemoteImagesToggle()
                     Divider()
                     TextSizeCommands()
@@ -144,6 +145,10 @@ private struct SettingsView: View {
                 }
                 Picker("本文の幅", selection: $settings.contentWidth) {
                     ForEach(ContentWidth.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                Toggle(isOn: $settings.showLineNumbers) {
+                    Text("行番号を表示")
+                    Text("元のファイルの行番号を左の余白に出します。プレビューでは、段落や見出しなどの先頭の行の番号を出します。")
                 }
                 Toggle(isOn: $settings.loadRemoteImages) {
                     Text("リモート画像を読み込む")
@@ -317,6 +322,15 @@ private struct TextSizeCommands: View {
         Picker("本文の幅", selection: $settings.contentWidth) {
             ForEach(ContentWidth.allCases, id: \.self) { Text($0.title).tag($0) }
         }
+    }
+}
+
+/// 「表示」メニューの「行番号を表示」（チェック付き）。
+private struct LineNumbersToggle: View {
+    @Bindable private var settings = AppSettings.shared
+
+    var body: some View {
+        Toggle("行番号を表示", isOn: $settings.showLineNumbers)
     }
 }
 
