@@ -508,15 +508,7 @@ struct EditorView: NSViewRepresentable {
         }
 
         private func lineStarts(_ string: NSString) -> [Int] {
-            var starts = [0]
-            var search = NSRange(location: 0, length: string.length)
-            while true {
-                let found = string.range(of: "\n", options: .literal, range: search)
-                guard found.location != NSNotFound else { break }
-                starts.append(NSMaxRange(found))
-                search = NSRange(location: NSMaxRange(found), length: string.length - NSMaxRange(found))
-            }
-            return starts
+            EditorMarksView.lineStarts(string)
         }
 
         private func lineNumber(at index: Int, in string: NSString) -> Int {
@@ -547,6 +539,8 @@ final class EditorMarksView: NSView {
     private var marks = PreviewMarks()
     /// 各行の先頭の文字位置
     private var lineStarts: [Int] = [0]
+    /// lineStarts を作った時の本文の長さ
+    private var lineStartsLength = 0
     private var popover: NSPopover?
     private var shownKey: MarkKey?
     private var watchTask: Task<Void, Never>?
@@ -574,31 +568,39 @@ final class EditorMarksView: NSView {
     func update(marks: PreviewMarks, bookmarkIndexes: [Int], lineStarts: [Int]) {
         self.marks = marks
         self.bookmarkIndexes = bookmarkIndexes
-        self.lineStarts = lineStarts
-        needsDisplay = true
+        setLineStarts(lineStarts)
     }
 
     func setLineStarts(_ lineStarts: [Int]) {
         self.lineStarts = lineStarts
+        lineStartsLength = (textView?.string as NSString?)?.length ?? 0
         needsDisplay = true
+    }
+
+    static func lineStarts(_ string: NSString) -> [Int] {
+        var starts = [0]
+        var search = NSRange(location: 0, length: string.length)
+        while true {
+            let found = string.range(of: "\n", options: .literal, range: search)
+            guard found.location != NSNotFound else { break }
+            starts.append(NSMaxRange(found))
+            search = NSRange(location: NSMaxRange(found), length: string.length - NSMaxRange(found))
+        }
+        return starts
     }
 
     // MARK: 描画
 
     override func draw(_ dirtyRect: NSRect) {
-        guard let textView, let layoutManager = textView.layoutManager else { return }
-        let length = (textView.string as NSString).length
+        guard let textView else { return }
         let textLeft = textView.textContainerOrigin.x + (textView.textContainer?.lineFragmentPadding ?? 0)
 
         if showsLineNumbers { drawLineNumbers(in: dirtyRect, right: textLeft - EditorStyle.lineNumberRight) }
 
         EditorStyle.bookmark.setFill()
         for index in bookmarkIndexes {
-            let fragment = index < length
-                ? layoutManager.lineFragmentUsedRect(forGlyphAt: layoutManager.glyphIndexForCharacter(at: index), effectiveRange: nil)
-                : layoutManager.extraLineFragmentUsedRect
             // 本文の左端（文字の開始位置）から 13pt 離して置く
-            let mark = NSRect(x: textLeft - 22, y: fragment.midY + textView.textContainerOrigin.y - 6.5, width: 9, height: 13)
+            let mark = NSRect(x: textLeft - 22, y: textMiddle(at: index) - 6.5, width: 9, height: 13)
             guard mark.intersects(dirtyRect) else { continue }
             EditorStyle.bookmarkPath(in: mark).fill()
         }
@@ -624,10 +626,55 @@ final class EditorMarksView: NSView {
         }
     }
 
-    /// rect の高さにある行の番号を、付箋の印の左に右寄せで描く（折り返した行は1段目だけ）。
+    /// rect の高さにある行の番号を、付箋の印の左に右寄せで描く。
     private func drawLineNumbers(in rect: NSRect, right: CGFloat) {
-        guard let textView, let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
-        let length = (textView.string as NSString).length
+        let ascender = NSFont.monospacedDigitSystemFont(ofSize: EditorStyle.lineNumberFontSize, weight: .regular).ascender
+        for (line, baseline) in lineNumberBaselines(in: rect) {
+            let text = NSAttributedString(string: "\(line)", attributes: EditorStyle.lineNumberAttributes)
+            text.draw(at: NSPoint(x: right - text.size().width, y: baseline - ascender))
+        }
+    }
+
+    /// 文字位置の行の基準線（ビューの座標）とその文字のフォント。
+    /// 行の高さの倍率の分の余白は文字の上に入るので、印は行の矩形ではなく文字の位置にそろえる（行の中央だと文字より上に寄る）。
+    private func textLine(at index: Int) -> (baseline: CGFloat, font: NSFont) {
+        guard let textView, let layoutManager = textView.layoutManager, let storage = textView.textStorage else {
+            return (0, EditorStyle.bodyFont)
+        }
+        let originY = textView.textContainerOrigin.y
+        guard index < storage.length else {
+            let extra = layoutManager.extraLineFragmentRect
+            if extra.isEmpty && storage.length > 0 { return textLine(at: storage.length - 1) }
+            return (extra.minY + EditorStyle.lastLineBaseline + originY, EditorStyle.bodyFont)
+        }
+        let glyph = layoutManager.glyphIndexForCharacter(at: index)
+        let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        let font = storage.attribute(.font, at: index, effectiveRange: nil) as? NSFont ?? EditorStyle.bodyFont
+        return (fragment.minY + layoutManager.location(forGlyphAt: glyph).y + originY, font)
+    }
+
+    /// 文字位置の行の文字の上端（ビューの座標）
+    func textTop(at index: Int) -> CGFloat {
+        let line = textLine(at: index)
+        return line.baseline - line.font.ascender
+    }
+
+    /// 文字位置の行の文字の高さの中央（ビューの座標）
+    func textMiddle(at index: Int) -> CGFloat {
+        let line = textLine(at: index)
+        return line.baseline - (line.font.ascender + line.font.descender) / 2
+    }
+
+    /// rect の高さにある行の番号と基準線の高さ（ビューの座標。折り返した行は1段目だけ）
+    func lineNumberBaselines(in rect: NSRect) -> [(line: Int, baseline: CGFloat)] {
+        guard let textView, let layoutManager = textView.layoutManager, let container = textView.textContainer else { return [] }
+        let string = textView.string as NSString
+        let length = string.length
+        // IME の変換中は textDidChange が来ないことがある。古い位置のままだと、変換している行より下の番号が1行上にずれる。
+        if length != lineStartsLength {
+            lineStarts = Self.lineStarts(string)
+            lineStartsLength = length
+        }
         let origin = textView.textContainerOrigin
         let area = NSRect(x: 0, y: rect.minY - origin.y, width: container.size.width, height: rect.height)
         let visible = layoutManager.characterRange(
@@ -639,17 +686,14 @@ final class EditorMarksView: NSView {
             let mid = (lo + hi + 1) / 2
             if lineStarts[mid] <= visible.location { lo = mid } else { hi = mid - 1 }
         }
+        var result: [(line: Int, baseline: CGFloat)] = []
         for line in lo..<lineStarts.count {
             let start = lineStarts[line]
             guard start <= NSMaxRange(visible), start <= length else { break }
-            let fragment = start < length
-                ? layoutManager.lineFragmentRect(forGlyphAt: layoutManager.glyphIndexForCharacter(at: start), effectiveRange: nil)
-                : layoutManager.extraLineFragmentRect
-            guard !fragment.isEmpty else { continue }
-            let text = NSAttributedString(string: "\(line + 1)", attributes: EditorStyle.lineNumberAttributes)
-            let size = text.size()
-            text.draw(at: NSPoint(x: right - size.width, y: fragment.midY + origin.y - size.height / 2))
+            guard start < length || !layoutManager.extraLineFragmentRect.isEmpty else { continue }
+            result.append((line + 1, textLine(at: start).baseline))
         }
+        return result
     }
 
     /// 削除した行数の丸い印。「−」は文字だと高さがずれるので、印の中心（＝赤線の中心）に図形で描く。
@@ -711,8 +755,8 @@ final class EditorMarksView: NSView {
                 // 見えている範囲の中の最初と最後の文字（空行は改行の位置）
                 let first = max(range.location, visible.location)
                 let last = max(first, min(NSMaxRange(range), visibleEnd) - 1)
-                let top = lineRect(at: first).minY, bottom = lineRect(at: last).maxY
-                let bar = NSRect(x: textLeft - 9, y: top + 2, width: 3, height: max(2, bottom - top - 4))
+                let top = textTop(at: first), bottom = lineRect(at: last).maxY
+                let bar = NSRect(x: textLeft - 9, y: top, width: 3, height: max(2, bottom - top - 1))
                 result.append(.bar(rect: bar, latest: latest, lines: lines))
             }
         }
@@ -720,8 +764,8 @@ final class EditorMarksView: NSView {
             let atEnd = line > lineStarts.count
             let index = atEnd ? string.length : lineStarts[line - 1]
             guard index >= visible.location - 1, index <= visibleEnd + 1 else { continue }
-            // 赤線（2px）は行の上端の上に、末尾の削除は最後の行の下端の下に引く
-            let y = atEnd ? lineRect(at: max(0, string.length - 1)).maxY + 1 : lineRect(at: index).minY - 1
+            // 赤線（2px）は上の行の文字と下の行の文字の間の余白の中央に、末尾の削除は最後の行の下端の下に引く
+            let y = atEnd ? lineRect(at: max(0, string.length - 1)).maxY + 1 : (lineRect(at: index).minY + textTop(at: index)) / 2
             result.append(.deletion(y: y, line: line, count: marks.changes.removed[line]?.lineCount ?? 0))
         }
         return result
@@ -875,9 +919,19 @@ enum EditorStyle {
     static let bookmark = NSColor.controlAccentColor
     static let textInset: CGFloat = 28
     static let textInsetTop: CGFloat = 24
+    static let lineNumberFontSize: CGFloat = 11
     static let lineNumberAttributes: [NSAttributedString.Key: Any] = [
-        .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.tertiaryLabelColor,
+        .font: NSFont.monospacedDigitSystemFont(ofSize: lineNumberFontSize, weight: .regular), .foregroundColor: NSColor.tertiaryLabelColor,
     ]
+    /// 文字の無い最後の行の基準線（行の上端から）。本文の行と同じ行の高さの倍率で組んだ時の位置。
+    static let lastLineBaseline: CGFloat = {
+        let layoutManager = NSLayoutManager()
+        let storage = NSTextStorage(string: "0", attributes: base)
+        let container = NSTextContainer(size: NSSize(width: 100, height: 100))
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(container)
+        return layoutManager.location(forGlyphAt: 0).y
+    }()
     /// 行番号の右端から本文の左端までの距離（付箋の印の左）
     static let lineNumberRight: CGFloat = 24
 
