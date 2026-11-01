@@ -203,6 +203,7 @@ make dmg SIGN="Apple Development"   # 公証の手前まで（証明書を変え
   - 描くのは先頭の 1MB まで（Quick Look には時間の制限がある）。切ったときは冒頭にその旨を出す。10MB を超えるファイルは読まない（Quick Look の既定の表示になる）。
 - 別のアプリ（MDHero など）も Markdown の Quick Look を持っていると、そちらが使われることがある。「システム設定」→「一般」→「ログイン項目と機能拡張」→「Quick Look」で切り替える。登録の状況は `pluginkit -m -v -p com.apple.quicklook.preview`。開発中のビルドの機能拡張は、`make build` の後に起動するか `pluginkit -a <appex>` で登録される。
 - 配布：Xcode が Developer ID・Hardened Runtime・タイムスタンプで署名する（xcconfig がすべてのターゲットに効く）。`make archive` が機能拡張の Hardened Runtime も確かめる。
+- ⌘F での本文の検索は試作して確かめたがやめた（macOS 27.0.1 の Finder のスペースキーのパネル）。ビュー方式（`QLIsDataBasedPreview` を外して自前の WKWebView を持つ）にしても、本文や検索欄をクリックした後でもキー入力は機能拡張のプロセスに届かなかった（⌘F は Finder の検索が動き、文字は Finder の頭文字選択に回り、スペースはパネルを閉じる）。ビュー方式の WKWebView は `com.apple.security.network.client` が無いと WebContent プロセスが落ちて白紙になった。
 - Finder のアイコンの縮図（Thumbnail の機能拡張）は作って試したがやめた。macOS 27 では Markdown（public.plain-text の一種）に標準のテキストの縮図（`com.apple.quicklook.thumbnail.TextExtension`）が優先され、登録して有効にしても、アプリを Applications に置いても呼ばれなかった。
 
 ## ファイル構成
