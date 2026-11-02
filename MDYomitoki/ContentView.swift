@@ -79,6 +79,10 @@ struct ContentView: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(model.changeItems, id: \.self) { item in
                             ChangeRow(item: item) { model.goToChange(line: item.line) }
+                                .contextMenu {
+                                    Button("この変更を戻す") { model.revertChange(line: item.line) }
+                                    Button("この変更を確認済みにする") { model.acceptChange(line: item.line) }
+                                }
                         }
                     }
                 }

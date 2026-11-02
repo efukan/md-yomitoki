@@ -482,6 +482,21 @@ html.line-numbers { --content-left: 72px; }
   font-weight: 600;
 }
 .rp-title:only-child { margin-bottom: 0; }
+.rp-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.rp-head .rp-title {
+  flex: 1;
+  margin-bottom: 0;
+}
+.rp-head button {
+  flex: none;
+  font: inherit;
+  font-size: 11px;
+}
 #removed-pop pre {
   margin: 0;
   padding: 0 0 0 8px;

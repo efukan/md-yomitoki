@@ -344,24 +344,32 @@ final class DocumentModel {
     }
 
     /// プレビューのチェックボックスのクリック。未保存の編集が無ければすぐ保存する（AI の TODO に印を付ける用途）。
-    /// 未保存の編集がある時は、その編集と一緒に保存されるよう本文だけ書き換えて未保存のままにする。
-    /// ⌘Z で戻せる（取り消し・やり直しも同じ切り替えで、同じく未保存の編集が無ければすぐ保存する）。
-    /// expected は取り消し・やり直しの時に、その切り替えの直後の内容。違えば（外部更新などで変わった）何もしない。
-    func toggleTask(line: Int, expected: String? = nil) {
+    func toggleTask(line: Int) {
+        guard let newText = MarkdownFormatter.toggleTask(in: text, line: line) else { return }
+        replaceText(with: newText, action: "チェックボックスの切り替え")
+    }
+
+    private var hasNoUnsavedEdits: Bool { !isDirty && !isEditing && pendingDiskText == nil }
+
+    /// 文書側で行う書き換え（チェックボックス・変更を戻す）。未保存の編集が無ければすぐ保存し、あれば本文だけ書き換えて
+    /// 未保存のままにする（ほかの編集を勝手に保存しない）。⌘Z で戻せる（取り消し・やり直しも同じ書き換えで、同じく未保存の
+    /// 編集が無ければすぐ保存する）。expected は取り消し・やり直しの時に、その書き換えの直後の内容。違えば
+    /// （外部更新などで変わった）何もしない。
+    private func replaceText(with newText: String, action: String, expected: String? = nil) {
         guard expected == nil || expected == text else {
             NSSound.beep()
             return
         }
-        guard let newText = MarkdownFormatter.toggleTask(in: text, line: line) else { return }
-        let wasClean = !isDirty && !isEditing && pendingDiskText == nil
+        let oldText = text
+        let wasClean = hasNoUnsavedEdits
         // エディタがあれば本文の編集として映す（外部更新と違って、エディタの取り消しの履歴を消さない）
         if editor?.applyWithoutUndo(from: text, to: newText) != true {
             text = newText
         }
         undoManager?.registerUndo(withTarget: self) { model in
-            MainActor.assumeIsolated { model.toggleTask(line: line, expected: newText) }
+            MainActor.assumeIsolated { model.replaceText(with: oldText, action: action, expected: newText) }
         }
-        undoManager?.setActionName("チェックボックスの切り替え")
+        undoManager?.setActionName(action)
         clearLatestChanges()
         refreshDerived()
         updateDirty()
@@ -575,6 +583,10 @@ final class DocumentModel {
     /// git HEAD と比較していた場合も、今の内容を基準にする（＝通常の基準に戻る）。
     func markAsReviewed() {
         baselineLoadTask?.cancel()
+        // 基準が変わらない時は、空の取り消し履歴を残さない
+        if reviewedBaseline != text || baselineSource != .reviewed || !latestChanges.isEmpty {
+            registerReviewUndo(action: "確認済みにする")
+        }
         reviewedBaseline = text
         BaselineStore.shared.save(text, for: url.path)
         externalUpdateCount = 0
@@ -587,6 +599,105 @@ final class DocumentModel {
         // 作り直しの途中なら、新しい基準で作り直す（古い基準の差分を後から反映しない）
         if renderTask != nil { refreshDerived() }
         lastJump = nil
+    }
+
+    /// 「確認済み」で変わる状態。押し間違えると前の基準が写しごと無くなるので、⌘Z で戻せるように覚えておく。
+    private struct ReviewState {
+        let baseline: String
+        let source: BaselineSource
+        let updateCount: Int
+        let latest: LineChanges
+        let latestFrom: String?
+        let jumpToLatestFirst: Bool
+    }
+
+    /// 今の状態に戻す取り消しを登録する。本文は変えないので、エディタの入力の取り消しの位置はずれない。
+    /// 履歴は後ろから順に戻るので、戻す時の本文は押した時と同じ（外部更新が来たら履歴ごと消える）。
+    private func registerReviewUndo(action: String) {
+        let state = ReviewState(baseline: reviewedBaseline, source: baselineSource, updateCount: externalUpdateCount,
+                                latest: latestChanges, latestFrom: pendingLatestFrom, jumpToLatestFirst: jumpToLatestFirst)
+        undoManager?.registerUndo(withTarget: self) { model in
+            MainActor.assumeIsolated { model.restoreReview(state, action: action) }
+        }
+        undoManager?.setActionName(action)
+    }
+
+    private func restoreReview(_ state: ReviewState, action: String) {
+        registerReviewUndo(action: action)  // やり直し
+        reviewedBaseline = state.baseline
+        BaselineStore.shared.save(state.baseline, for: url.path)
+        baselineSource = state.source
+        externalUpdateCount = state.updateCount
+        latestChanges = state.latest
+        pendingLatestFrom = state.latestFrom
+        jumpToLatestFirst = state.jumpToLatestFirst
+        recomputeChanges()
+    }
+
+    /// 見えている印が今の本文のものか（描き直しを待っている間の古い行番号で、別のかたまりを操作しないように）
+    private var marksAreCurrent: Bool {
+        renderedText == text && (editor?.currentText ?? text) == text
+    }
+
+    /// 1か所の変更を基準の内容に戻す（line は `LineHunk.line`）。⌘Z で取り消せる。
+    /// 未保存の編集が無ければすぐ保存するので、その前にファイルが読んだ時のままか確かめる
+    /// （AI が書いた直後で監視の知らせがまだ届いていない時に、その内容を上書きしないように）。
+    func revertChange(line: Int) {
+        guard marksAreCurrent else {
+            NSSound.beep()
+            return
+        }
+        let text = text, baseline = baseline, url = url
+        Task { [weak self] in
+            let (reverted, disk) = await Task.detached(priority: .userInitiated) {
+                (LineDiff.reverting(hunkAt: line, from: baseline, to: text), try? DocumentModel.readText(at: url).0)
+            }.value
+            guard let self else { return }
+            guard let reverted, self.text == text, self.baseline == baseline else {
+                NSSound.beep()
+                return
+            }
+            if self.hasNoUnsavedEdits, disk != self.savedText {
+                self.reloadFromDisk()
+                let alert = NSAlert()
+                alert.messageText = "変更を戻しませんでした"
+                alert.informativeText = "ファイルがたった今、外部で更新されました。新しい内容を確かめてから、もう一度操作してください。"
+                alert.runModal()
+                return
+            }
+            self.replaceText(with: reverted, action: "変更を戻す")
+        }
+    }
+
+    /// 1か所の変更だけを確認済みにする：基準のそのかたまりを今の内容にする（line は `LineHunk.line`）。⌘Z で取り消せる。
+    /// git HEAD と比較していた場合も、全体の「確認済み」と同じく通常の基準に移る（残りの差分は HEAD からのまま）。
+    func acceptChange(line: Int) {
+        guard marksAreCurrent else {
+            NSSound.beep()
+            return
+        }
+        let text = text, baseline = baseline
+        Task { [weak self] in
+            let accepted = await Task.detached(priority: .userInitiated) {
+                LineDiff.accepting(hunkAt: line, from: baseline, to: text)
+            }.value
+            guard let self else { return }
+            guard let accepted, self.text == text, self.baseline == baseline else {
+                NSSound.beep()
+                return
+            }
+            // 最後の1か所なら全体の「確認済み」と同じ（更新の回数も数え直す）
+            guard accepted.baseline != text else {
+                self.markAsReviewed()
+                return
+            }
+            self.registerReviewUndo(action: "変更を確認済みにする")
+            self.reviewedBaseline = accepted.baseline
+            BaselineStore.shared.save(accepted.baseline, for: self.url.path)
+            self.baselineSource = .reviewed
+            self.latestChanges = self.latestChanges.excluding(accepted.lines)
+            self.recomputeChanges()
+        }
     }
 
     /// ⌘J：次の変更箇所へ。

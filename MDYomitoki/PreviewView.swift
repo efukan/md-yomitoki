@@ -306,6 +306,12 @@ struct PreviewView: NSViewRepresentable {
             case "toggleBookmark":
                 guard let lines = body["lines"] as? [Int], !lines.isEmpty else { return }
                 model.toggleBookmark(lines: lines)
+            case "revertChange":
+                guard let line = body["line"] as? Int else { return }
+                model.revertChange(line: line)
+            case "acceptChange":
+                guard let line = body["line"] as? Int else { return }
+                model.acceptChange(line: line)
             case "inlineDiffs":
                 // 吹き出しを開く時に、そのかたまりの分だけ文字単位で比べる
                 guard let id = body["id"] as? Int, let lines = body["lines"] as? [Int] else { return }

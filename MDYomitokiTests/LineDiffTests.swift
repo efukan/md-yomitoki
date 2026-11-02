@@ -216,4 +216,88 @@ struct LineDiffTests {
         #expect(LineChanges(deletedBefore: [11]).sectionLines(headings: headings) == [8])
         #expect(LineChanges(deletedBefore: [1]).sectionLines(headings: headings).isEmpty)
     }
+
+    // MARK: かたまりごとに戻す・確認済みにする
+
+    @Test func revertingRestoresOnlyThatHunk() {
+        let old = "a\nb\nc\nd\ne"
+        let new = "a\nB\nc\nd\nE"
+        #expect(LineDiff.reverting(hunkAt: 2, from: old, to: new) == "a\nb\nc\nd\nE")
+        #expect(LineDiff.reverting(hunkAt: 5, from: old, to: new) == "a\nB\nc\nd\ne")
+    }
+
+    @Test func revertingAddedLinesRemovesThem() {
+        #expect(LineDiff.reverting(hunkAt: 2, from: "a\nc", to: "a\nb1\nb2\nc") == "a\nc")
+        // 末尾の改行も行として扱う
+        #expect(LineDiff.reverting(hunkAt: 2, from: "a", to: "a\n") == "a")
+    }
+
+    @Test func revertingDeletionBringsLinesBack() {
+        #expect(LineDiff.reverting(hunkAt: 2, from: "a\nb\nc\nd", to: "a\nd") == "a\nb\nc\nd")
+        #expect(LineDiff.reverting(hunkAt: 2, from: "a\nb\nc", to: "a") == "a\nb\nc")
+    }
+
+    @Test func revertingMergedDeletionKeepsTheBlankLinesBetween() {
+        // 見出しと本文を消して空行だけが残ると、削除は1つにまとめて出す。戻す時も全部戻す。
+        let old = "前\n\n# 消える\n\n消える本文\n\n後"
+        let new = "前\n\n\n後"
+        let changes = LineDiff.changes(from: old, to: new)
+        #expect(changes.deletedBefore.count == 1)
+        let line = changes.deletedBefore[0]
+        #expect(LineDiff.reverting(hunkAt: line, from: old, to: new) == old)
+    }
+
+    @Test func revertingHunkOverTheDisplayLimitRestoresEveryLine() {
+        // 吹き出しに出す内容は 200 行で切るが、戻す内容は基準から作るので全部戻る
+        let long = (1...300).map { "行\($0)" }.joined(separator: "\n")
+        let old = "前\n\(long)\n後"
+        let new = "前\n後"
+        #expect(LineDiff.changes(from: old, to: new).removed[2]?.lineCount == 300)
+        #expect(LineDiff.reverting(hunkAt: 2, from: old, to: new) == old)
+    }
+
+    @Test func hunkOperationsIgnoreLinesWithoutHunk() {
+        #expect(LineDiff.reverting(hunkAt: 1, from: "a\nb", to: "a\nB") == nil)
+        #expect(LineDiff.accepting(hunkAt: 1, from: "a\nb", to: "a\nB") == nil)
+    }
+
+    @Test func acceptingMovesOnlyThatHunkIntoBaseline() throws {
+        let old = "a\nb\nc\nd\ne"
+        let new = "a\nB\nc\nd\nE"
+        let accepted = try #require(LineDiff.accepting(hunkAt: 2, from: old, to: new))
+        #expect(accepted.baseline == "a\nB\nc\nd\ne")
+        #expect(accepted.lines == 1..<2)
+        // 残りのかたまりは同じ行のまま未確認
+        #expect(LineDiff.changes(from: accepted.baseline, to: new).changed == [5...5])
+    }
+
+    @Test func acceptingAddedAndDeletedHunks() throws {
+        let added = try #require(LineDiff.accepting(hunkAt: 2, from: "a\nc", to: "a\nb\nc"))
+        #expect(added.baseline == "a\nb\nc")
+        let deleted = try #require(LineDiff.accepting(hunkAt: 2, from: "a\nb\nc", to: "a\nc"))
+        #expect(deleted.baseline == "a\nc")
+        #expect(deleted.lines == 1..<1)
+    }
+
+    @Test func acceptingEveryHunkEndsAtTheCurrentText() throws {
+        var baseline = "前\n段落\n\n消える\n\n残る\n"
+        let new = "前\n段落を直した\n\n残る\n足した\n"
+        while let line = LineDiff.changes(from: baseline, to: new).jumpLines.first {
+            baseline = try #require(LineDiff.accepting(hunkAt: line, from: baseline, to: new)).baseline
+        }
+        #expect(baseline == new)
+    }
+
+    @Test func excludingRemovesMarksOfTheAcceptedHunk() {
+        let latest = LineChanges(changed: [2...3, 6...6], deletedBefore: [4, 8], removed: [
+            2: RemovedLines(["x"]), 6: RemovedLines(["y"]), 4: RemovedLines(["z"]), 8: RemovedLines(["w"]),
+        ])
+        // 0 始まりの 1..<3 は 2〜3 行目。その直後（4 行目の前）の削除も同じかたまり。
+        let rest = latest.excluding(1..<3)
+        #expect(rest.changed == [6...6])
+        #expect(rest.deletedBefore == [8])
+        #expect(Set(rest.removed.keys) == [6, 8])
+        // 削除だけのかたまりは行を持たないので、その位置の削除だけ除く
+        #expect(latest.excluding(7..<7).deletedBefore == [4])
+    }
 }

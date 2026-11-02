@@ -90,6 +90,8 @@ struct EditorView: NSViewRepresentable {
             marksView.textView = textView
             marksView.frame = textView.bounds
             marksView.autoresizingMask = [.width, .height]
+            marksView.onRevert = { [weak self] line in self?.model.revertChange(line: line) }
+            marksView.onAccept = { [weak self] line in self?.model.acceptChange(line: line) }
             textView.addSubview(marksView)
         }
 
@@ -157,22 +159,7 @@ struct EditorView: NSViewRepresentable {
         private func applyExternal(_ text: String) {
             guard let storage = textView.textStorage else { return }
             let old = storage.string as NSString
-            let new = text as NSString
-            var prefix = 0
-            let limit = min(old.length, new.length)
-            while prefix < limit && old.character(at: prefix) == new.character(at: prefix) { prefix += 1 }
-            var suffix = 0
-            while suffix < limit - prefix
-                    && old.character(at: old.length - 1 - suffix) == new.character(at: new.length - 1 - suffix) { suffix += 1 }
-            // サロゲートペアや結合文字の途中で切らない
-            if prefix < old.length { prefix = old.rangeOfComposedCharacterSequence(at: prefix).location }
-            if suffix > 0 {
-                let oldEnd = old.length - suffix
-                let sequence = old.rangeOfComposedCharacterSequence(at: oldEnd)
-                if sequence.location < oldEnd { suffix = old.length - NSMaxRange(sequence) }
-            }
-            let replaced = NSRange(location: prefix, length: old.length - prefix - suffix)
-            let replacement = new.substring(with: NSRange(location: prefix, length: new.length - prefix - suffix))
+            let (replaced, replacement) = Self.differingRange(from: old, to: text as NSString)
             let delta = (replacement as NSString).length - replaced.length
 
             let anchor = visibleAnchor()
@@ -194,6 +181,25 @@ struct EditorView: NSViewRepresentable {
             }
             if showsLineNumbers { refreshLineNumbers() }
             scheduleDecorate(after: 0)
+        }
+
+        /// 共通する先頭と末尾を除いた、変わった範囲と置き換える文字。
+        private static func differingRange(from old: NSString, to new: NSString) -> (range: NSRange, replacement: String) {
+            var prefix = 0
+            let limit = min(old.length, new.length)
+            while prefix < limit && old.character(at: prefix) == new.character(at: prefix) { prefix += 1 }
+            var suffix = 0
+            while suffix < limit - prefix
+                    && old.character(at: old.length - 1 - suffix) == new.character(at: new.length - 1 - suffix) { suffix += 1 }
+            // サロゲートペアや結合文字の途中で切らない
+            if prefix < old.length { prefix = old.rangeOfComposedCharacterSequence(at: prefix).location }
+            if suffix > 0 {
+                let oldEnd = old.length - suffix
+                let sequence = old.rangeOfComposedCharacterSequence(at: oldEnd)
+                if sequence.location < oldEnd { suffix = old.length - NSMaxRange(sequence) }
+            }
+            let range = NSRange(location: prefix, length: old.length - prefix - suffix)
+            return (range, new.substring(with: NSRange(location: prefix, length: new.length - prefix - suffix)))
         }
 
         /// フロントマターの行数が変わったか（変わっていたら覚え直す）
@@ -293,21 +299,24 @@ struct EditorView: NSViewRepresentable {
             return true
         }
 
-        /// 文書側で行った編集（プレビューのチェックボックス）を映す。外部更新と違って取り消しの履歴は消さず、
-        /// 取り消しは文書側が登録する（ここでは登録しない）。変わった所が1か所でなければ（映せなければ）false。
+        /// 文書側で行った編集（プレビューのチェックボックス・変更を戻す）を映す。外部更新と違って取り消しの履歴は消さず、
+        /// 取り消しは文書側が同じ履歴に登録する（ここでは登録しない。後ろから順に戻るので、文字数が変わっても
+        /// エディタの入力の取り消しの位置はずれない）。映せなければ false。
         func applyWithoutUndo(from old: String, to new: String) -> Bool {
             guard !textView.hasMarkedText(), textView.string == old else { return false }
-            let before = old as NSString, after = new as NSString
-            guard before.length == after.length else { return false }
-            var start = 0
-            while start < before.length && before.character(at: start) == after.character(at: start) { start += 1 }
-            var end = before.length
-            while end > start && before.character(at: end - 1) == after.character(at: end - 1) { end -= 1 }
-            let range = NSRange(location: start, length: end - start)
+            let (range, replacement) = Self.differingRange(from: old as NSString, to: new as NSString)
+            let delta = (replacement as NSString).length - range.length
+            // 選択は変わった範囲の後ろならずらし、重なっていたら範囲の先頭へ（文字数が変わらなければそのまま）
+            var selection = textView.selectedRange()
+            if delta != 0, NSMaxRange(selection) > range.location {
+                selection = selection.location >= NSMaxRange(range)
+                    ? NSRange(location: selection.location + delta, length: selection.length)
+                    : NSRange(location: range.location, length: 0)
+            }
             textView.breakUndoCoalescing()
             textView.undoManager?.disableUndoRegistration()
             defer { textView.undoManager?.enableUndoRegistration() }
-            return apply(TextEdit(range: range, replacement: after.substring(with: range), selection: textView.selectedRange()))
+            return apply(TextEdit(range: range, replacement: replacement, selection: selection))
         }
 
         /// 右クリックメニューの先頭に書式を並べる。
@@ -541,6 +550,9 @@ final class EditorMarksView: NSView {
     private var lineStarts: [Int] = [0]
     /// lineStarts を作った時の本文の長さ
     private var lineStartsLength = 0
+    /// 吹き出しの「戻す」「確認済み」（引数は `LineHunk.line`）
+    var onRevert: ((Int) -> Void)?
+    var onAccept: ((Int) -> Void)?
     private var popover: NSPopover?
     private var shownKey: MarkKey?
     private var watchTask: Task<Void, Never>?
@@ -569,6 +581,8 @@ final class EditorMarksView: NSView {
     }
 
     func update(marks: PreviewMarks, bookmarkIndexes: [Int], lineStarts: [Int]) {
+        // 吹き出しのボタンは行番号でかたまりを指すので、印が変わったら古い吹き出しを残さない
+        if marks != self.marks { closePopover() }
         self.marks = marks
         self.bookmarkIndexes = bookmarkIndexes
         setLineStarts(lineStarts)
@@ -815,30 +829,34 @@ final class EditorMarksView: NSView {
         let removed = marks.changes.removed
         if key.deletion {
             let entry = removed[key.line]
-            present(RemovedLinesView(title: "削除された \(entry?.lineCount ?? 0)行", text: entry?.text), for: key, anchor: anchor)
+            present([.init(line: key.line, content: .deleted(count: entry?.lineCount ?? 0, text: entry?.text))], for: key, anchor: anchor)
             return
         }
         let lines = marks.changes.changed.first { $0.lowerBound == key.line }
             ?? marks.latest.changed.first { $0.lowerBound == key.line } ?? key.line...key.line
-        let deleted = Set(marks.changes.deletedBefore)
-        let entries = removed.filter { lines.contains($0.key) && !deleted.contains($0.key) }.sorted { $0.key < $1.key }.map(\.value)
-        if entries.isEmpty {
-            present(RemovedLinesView(title: "追加された行（変更前の内容はありません）"), for: key, anchor: anchor)
+        // 線に重なるかたまり。足しただけのかたまりには消えた行が無い
+        let hunkLines = marks.changes.changed.filter { $0.overlaps(lines) }.map(\.lowerBound)
+        let entries = hunkLines.map { removed[$0] }
+        if entries.allSatisfy({ $0 == nil }) {
+            present(hunkLines.map { .init(line: $0, content: .added) }, for: key, anchor: anchor)
             return
         }
         // 書き換えは文字単位の差分をメインスレッドの外で計算してから出す
         pendingKey = key
         inlineTask?.cancel()
         inlineTask = Task { [weak self] in
-            let diffs = await Task.detached { entries.map(\.inlineDiff) }.value
+            let diffs = await Task.detached { entries.map { $0?.inlineDiff } }.value
             guard let self, !Task.isCancelled else { return }
             // 計算の間にマウスが離れたり印が変わったりしたら出さない
             guard self.isMouseOver(key), self.marks.changes.removed == removed else {
                 self.pendingKey = nil
                 return
             }
-            let rewrites = zip(entries, diffs).map { RemovedLinesView.Rewrite(text: $0.text, inline: $1) }
-            self.present(RemovedLinesView(rewrites: rewrites), for: key, anchor: anchor)
+            let hunks = hunkLines.indices.map { index -> RemovedLinesView.Hunk in
+                guard let entry = entries[index] else { return .init(line: hunkLines[index], content: .added) }
+                return .init(line: hunkLines[index], content: .rewritten(text: entry.text, inline: diffs[index]))
+            }
+            self.present(hunks, for: key, anchor: anchor)
         }
     }
 
@@ -847,9 +865,16 @@ final class EditorMarksView: NSView {
         return hit(at: convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil))?.0 == key
     }
 
-    private func present(_ content: RemovedLinesView, for key: MarkKey, anchor: NSRect) {
+    private func present(_ hunks: [RemovedLinesView.Hunk], for key: MarkKey, anchor: NSRect) {
         popover?.close()
         pendingKey = nil
+        let content = RemovedLinesView(hunks: hunks, onRevert: { [weak self] line in
+            self?.closePopover()
+            self?.onRevert?(line)
+        }, onAccept: { [weak self] line in
+            self?.closePopover()
+            self?.onAccept?(line)
+        })
         let host = NSHostingController(rootView: content)
         host.sizingOptions = [.preferredContentSize]
         let popover = NSPopover()
@@ -894,34 +919,47 @@ final class EditorMarksView: NSView {
 
 /// エディタの吹き出しの中身（変更前の内容・削除された行）。長いときはスクロールする。
 private struct RemovedLinesView: View {
-    struct Rewrite {
-        let text: String
-        let inline: InlineDiff?
+    struct Hunk {
+        enum Content {
+            case added
+            case deleted(count: Int, text: String?)
+            case rewritten(text: String, inline: InlineDiff?)
+        }
+
+        /// `LineHunk.line`
+        let line: Int
+        let content: Content
     }
 
-    /// 削除と追加の見出し（書き換えには無い）
-    var title: String?
-    /// 削除された行
-    var text: String?
-    var rewrites: [Rewrite] = []
+    let hunks: [Hunk]
+    let onRevert: (Int) -> Void
+    let onAccept: (Int) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let title { heading(title) }
-            if let text { block(AttributedString(text), bar: .systemRed) }
-            // かたまりごとに変更前と変更後を並べ、組の間に線を引く
-            ForEach(Array(rewrites.enumerated()), id: \.offset) { index, rewrite in
+            // 最新の更新で基準と同じ内容に戻った行（戻す変更が無い）
+            if hunks.isEmpty { heading("追加された行（変更前の内容はありません）") }
+            // かたまりごとに見出しとボタンを出し、かたまりの間に線を引く
+            ForEach(Array(hunks.enumerated()), id: \.offset) { index, hunk in
                 if index > 0 { Divider().padding(.vertical, 4) }
-                heading("変更前")
-                if let inline = rewrite.inline {
-                    block(attributed(inline.old, color: .systemRed.withAlphaComponent(0.35)), bar: .systemOrange)
-                    heading("変更後").padding(.top, 4)
-                    block(attributed(inline.new, color: .systemOrange.withAlphaComponent(0.45)), bar: .systemOrange)
-                } else {
-                    Text("変更が大きいため、文字ごとには比べていません")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    block(AttributedString(rewrite.text), bar: .systemOrange)
+                switch hunk.content {
+                case .added:
+                    header("追加された行（変更前の内容はありません）", line: hunk.line)
+                case .deleted(let count, let text):
+                    header("削除された \(count)行", line: hunk.line)
+                    if let text { block(AttributedString(text), bar: .systemRed) }
+                case .rewritten(let text, let inline):
+                    header("変更前", line: hunk.line)
+                    if let inline {
+                        block(attributed(inline.old, color: .systemRed.withAlphaComponent(0.35)), bar: .systemOrange)
+                        heading("変更後").padding(.top, 4)
+                        block(attributed(inline.new, color: .systemOrange.withAlphaComponent(0.45)), bar: .systemOrange)
+                    } else {
+                        Text("変更が大きいため、文字ごとには比べていません")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        block(AttributedString(text), bar: .systemOrange)
+                    }
                 }
             }
         }
@@ -935,6 +973,17 @@ private struct RemovedLinesView: View {
         Text(text)
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
+    }
+
+    /// 長いと内容がスクロールするので、ボタンは内容の上に置く
+    private func header(_ text: String, line: Int) -> some View {
+        HStack(spacing: 6) {
+            heading(text)
+            Spacer()
+            Button("戻す") { onRevert(line) }
+            Button("確認済み") { onAccept(line) }
+        }
+        .controlSize(.small)
     }
 
     private func attributed(_ segments: [InlineDiff.Segment], color: NSColor) -> AttributedString {

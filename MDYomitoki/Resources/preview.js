@@ -279,6 +279,7 @@ function applyMarks(marks) {
   }
   bookmarkLines = marks?.bookmarks ?? [];
   removedEntries = [];
+  changedRanges = marks?.changed ?? [];
   if (marks) {
     for (const el of blocks) {
       if (ownsAny(el, marks.changed)) el.classList.add('chg');
@@ -533,6 +534,7 @@ const CHANGE_WIDTH = 3;  // 線の太さ
 const CHANGE_HIT = 5;    // 線の左右に広げる当たり判定
 const CHANGE_ZONE = CHANGE_GAP + CHANGE_WIDTH + CHANGE_HIT;  // 本文の左端からの当たり判定の幅
 let removedEntries = [];  // [{ line, count, text, inline（文字単位の差分。比べる前は undefined、比べられなければ null）, deletion: { el, before } | undefined }]
+let changedRanges = [];  // 変更のかたまりの行 [[先頭, 末尾]]。先頭の行が「戻す」「確認済み」でかたまりを指す
 let inlineRequest = null;  // 文字単位の差分の返事を待っている吹き出し { id, mark, mouseY, entries }
 let inlineRequestId = 0;
 const removedPopover = document.createElement('div');
@@ -570,7 +572,11 @@ function placeChangeMarks() {
       mark.style.left = `${x - CHANGE_HIT}px`;
       mark.style.top = `${bar.top}px`;
       mark.style.height = `${bar.bottom - bar.top}px`;
-      mark._entries = removedEntries.filter((e) => !e.deletion && bar.first <= e.line && e.line <= bar.last);
+      // 線に重なるかたまり。足しただけのかたまりには消えた行（entry）が無い
+      mark._hunks = changedRanges.filter(([first, last]) => first <= bar.last && bar.first <= last).map(([line]) => ({
+        line, entry: removedEntries.find((e) => !e.deletion && e.line === line),
+      }));
+      mark._entries = mark._hunks.flatMap((hunk) => hunk.entry ?? []);
       gutter.appendChild(mark);
     }
   }
@@ -626,28 +632,34 @@ function showRemoved(mark, mouseY) {
     post({ type: 'inlineDiffs', id: inlineRequest.id, lines: entries.map((e) => e.line) });
     return;
   }
-  const count = mark._entries.reduce((sum, e) => sum + e.count, 0);
+  // かたまりごとに見出しとボタンを出し、かたまりの間に線を引く
+  const separated = (index, nodes) => [...(index > 0 ? [document.createElement('hr')] : []), ...nodes];
   let children;
   if (mark._deleted) {
-    children = [removedTitle(`削除された ${count}行`), removedText(mark._entries.map((e) => e.text).join('\n⋯\n'))];
-  } else if (count === 0) {
+    children = mark._entries.flatMap((e, index) => separated(index, [
+      removedHead(`削除された ${e.count}行`, e.line), removedText(e.text),
+    ]));
+  } else if (mark._hunks.length === 0) {
+    // 最新の更新で基準と同じ内容に戻った行（戻す変更が無い）
     children = [removedTitle('追加された行（変更前の内容はありません）')];
   } else {
-    // かたまりごとに変更前と変更後を並べ、組の間に線を引く
-    children = mark._entries.flatMap((e, index) => [
-      ...(index > 0 ? [document.createElement('hr')] : []),
-      removedTitle('変更前'),
-      ...(e.inline
-        ? [removedParts(e.inline.old, 'rp-old'), removedTitle('変更後'), removedParts(e.inline.new, 'rp-new')]
-        // 説明は先に出す（長いと吹き出しの中でスクロールするので、後ろだと見えない）
-        : [removedNote('変更が大きいため、文字ごとには比べていません'), removedText(e.text)]),
-    ]);
+    children = mark._hunks.flatMap(({ line, entry: e }, index) => separated(index, !e
+      ? [removedHead('追加された行（変更前の内容はありません）', line)]
+      : [
+        removedHead('変更前', line),
+        ...(e.inline
+          ? [removedParts(e.inline.old, 'rp-old'), removedTitle('変更後'), removedParts(e.inline.new, 'rp-new')]
+          // 説明は先に出す（長いと吹き出しの中でスクロールするので、後ろだと見えない）
+          : [removedNote('変更が大きいため、文字ごとには比べていません'), removedText(e.text)]),
+      ]));
   }
   removedPopover.replaceChildren(...children);
   removedPopover.classList.toggle('rp-del', !!mark._deleted);
   removedPopover.hidden = false;
   const width = removedPopover.offsetWidth, height = removedPopover.offsetHeight;
-  const left = Math.max(8, Math.min(columnLeft(), window.innerWidth - 8 - width));
+  // 右端の「−行数」の印からは、吹き出しの右端を印にそろえる（本文の左端に出すとボタンまでマウスを動かす間に消えるため）
+  const preferred = mark.classList.contains('cdl') ? mark.getBoundingClientRect().right - width : columnLeft();
+  const left = Math.max(8, Math.min(preferred, window.innerWidth - 8 - width));
   const below = mouseY + 14;
   const top = below + height <= window.innerHeight - 8 ? below : Math.max(8, mouseY - 14 - height);
   removedPopover.style.left = `${window.scrollX + left}px`;
@@ -659,6 +671,23 @@ function removedTitle(text) {
   title.className = 'rp-title';
   title.textContent = text;
   return title;
+}
+
+// かたまりの見出しと「戻す」「確認済み」（長いと吹き出しの中でスクロールするので、ボタンは内容の上に置く）
+function removedHead(text, line) {
+  const head = document.createElement('div');
+  head.className = 'rp-head';
+  const button = (label, type) => {
+    const element = document.createElement('button');
+    element.textContent = label;
+    element.addEventListener('click', () => {
+      removedPopover.hidden = true;
+      post({ type, line });
+    });
+    return element;
+  };
+  head.append(removedTitle(text), button('戻す', 'revertChange'), button('確認済み', 'acceptChange'));
+  return head;
 }
 
 function removedNote(text) {

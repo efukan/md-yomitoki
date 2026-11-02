@@ -44,6 +44,27 @@ struct LineChanges: Equatable {
         }
         return result
     }
+
+    /// 新しいテキストの行（0 始まり）のかたまりに重なる印を除いたもの（そのかたまりを確認済みにした時）。
+    func excluding(_ lines: Range<Int>) -> LineChanges {
+        var result = LineChanges()
+        // 行番号は 1 始まり。削除はかたまりの直後の行の前に出ることがある
+        result.changed = changed.filter { !$0.overlaps((lines.lowerBound + 1)..<(lines.upperBound + 1)) }
+        result.deletedBefore = deletedBefore.filter { !((lines.lowerBound + 1)...(lines.upperBound + 1)).contains($0) }
+        let kept = Set(result.changed.map(\.lowerBound) + result.deletedBefore)
+        result.removed = removed.filter { kept.contains($0.key) }
+        return result
+    }
+}
+
+/// 差分のかたまり1つ。行は 0 始まりの半開区間。
+struct LineHunk: Equatable {
+    var old: Range<Int>
+    var new: Range<Int>
+    /// 削除だけのかたまり（間に空行をはさんだ削除をまとめた時は、その空行が new に残る）
+    var isDeletion: Bool
+    /// `LineChanges` でこのかたまりを指す行（1 始まり）
+    var line: Int { new.lowerBound + 1 }
 }
 
 /// サイドバーの「変更」欄の1行（変更のかたまり1つ）。
@@ -242,25 +263,57 @@ enum LineDiff {
 
     static func changes(from old: String, to new: String) -> LineChanges {
         guard old != new else { return LineChanges() }
-        let oldLines = old.split(separator: "\n", omittingEmptySubsequences: false)
-        let newLines = new.split(separator: "\n", omittingEmptySubsequences: false)
-        let diff = newLines.difference(from: oldLines)
+        let oldLines = lines(of: old), newLines = lines(of: new)
+        var result = LineChanges()
+        for hunk in hunks(from: oldLines, to: newLines) {
+            if hunk.isDeletion {
+                result.deletedBefore.append(hunk.line)
+                result.removed[hunk.line] = RemovedLines(Array(oldLines[hunk.old]))
+            } else {
+                result.changed.append(hunk.line...hunk.new.upperBound)
+                if !hunk.old.isEmpty {
+                    result.removed[hunk.line] = RemovedLines(Array(oldLines[hunk.old]), replacement: newLines[hunk.new])
+                }
+            }
+        }
+        return result
+    }
 
+    /// line（`LineHunk.line`）のかたまりだけを old の内容に戻した new。かたまりが無ければ nil。
+    static func reverting(hunkAt line: Int, from old: String, to new: String) -> String? {
+        let oldLines = lines(of: old)
+        var newLines = lines(of: new)
+        guard let hunk = hunks(from: oldLines, to: newLines).first(where: { $0.line == line }) else { return nil }
+        newLines.replaceSubrange(hunk.new, with: oldLines[hunk.old])
+        return newLines.joined(separator: "\n")
+    }
+
+    /// line（`LineHunk.line`）のかたまりだけを new の内容にした old（＝そのかたまりを確認済みにした基準）と、
+    /// そのかたまりの new での行（0 始まり）。かたまりが無ければ nil。
+    static func accepting(hunkAt line: Int, from old: String, to new: String) -> (baseline: String, lines: Range<Int>)? {
+        var oldLines = lines(of: old)
+        let newLines = lines(of: new)
+        guard let hunk = hunks(from: oldLines, to: newLines).first(where: { $0.line == line }) else { return nil }
+        oldLines.replaceSubrange(hunk.old, with: newLines[hunk.new])
+        return (oldLines.joined(separator: "\n"), hunk.new)
+    }
+
+    private static func lines(of text: String) -> [Substring] {
+        text.split(separator: "\n", omittingEmptySubsequences: false)
+    }
+
+    /// 両方の配列を共通の行で揃えながら歩き、続けて削除・追加された行をひとかたまりにする。
+    /// 追加を含むかたまりは「変更」（削除もあれば書き換え）、削除だけのかたまりは「削除の位置」になる。
+    static func hunks(from oldLines: [Substring], to newLines: [Substring]) -> [LineHunk] {
         var removed = Set<Int>()
         var inserted = Set<Int>()
-        for change in diff {
+        for change in newLines.difference(from: oldLines) {
             switch change {
             case .remove(let offset, _, _): removed.insert(offset)
             case .insert(let offset, _, _): inserted.insert(offset)
             }
         }
-
-        // 両方の配列を共通の行で揃えながら歩き、続けて削除・追加された行をひとかたまりにする。
-        // 追加を含むかたまりは「変更」（削除もあれば書き換え）、削除だけのかたまりは「削除の位置」になる。
-        var result = LineChanges()
-        // 直前の削除だけのかたまり。間に空行しか無い削除は1つにまとめる（見出しと本文をまとめて消すと、
-        // 間の空行だけが共通の行として残り、削除が2つに分かれて見えるため）。
-        var lastDeletion: (line: Int, gone: [Substring])?
+        var hunks: [LineHunk] = []
         var i = 0, j = 0
         while i < oldLines.count || j < newLines.count {
             guard removed.contains(i) || inserted.contains(j) else {
@@ -268,33 +321,21 @@ enum LineDiff {
                 j += 1
                 continue
             }
-            let start = j
-            var gone: [Substring] = []
+            let oldStart = i, newStart = j
             while removed.contains(i) || inserted.contains(j) {
-                if removed.contains(i) {
-                    gone.append(oldLines[i])
-                    i += 1
-                } else {
-                    j += 1
-                }
+                if removed.contains(i) { i += 1 } else { j += 1 }
             }
-            let line = start + 1
-            if j > start {
-                result.changed.append(line...j)
-                lastDeletion = nil
-            } else if let last = lastDeletion,
-                      newLines[(last.line - 1)..<start].allSatisfy({ $0.allSatisfy(\.isWhitespace) }) {
-                let merged = last.gone + newLines[(last.line - 1)..<start] + gone
-                result.removed[last.line] = RemovedLines(merged)
-                lastDeletion = (last.line, merged)
-                continue
+            // 間に空行しか無い削除は1つにまとめる（見出しと本文をまとめて消すと、
+            // 間の空行だけが共通の行として残り、削除が2つに分かれて見えるため）。
+            if j == newStart, let last = hunks.last, last.isDeletion,
+               newLines[last.new.lowerBound..<newStart].allSatisfy({ $0.allSatisfy(\.isWhitespace) }) {
+                hunks[hunks.count - 1].old = last.old.lowerBound..<i
+                hunks[hunks.count - 1].new = last.new.lowerBound..<newStart
             } else {
-                result.deletedBefore.append(line)
-                lastDeletion = (line, gone)
+                hunks.append(LineHunk(old: oldStart..<i, new: newStart..<j, isDeletion: j == newStart))
             }
-            if !gone.isEmpty { result.removed[line] = RemovedLines(gone, replacement: j > start ? newLines[start..<j] : nil) }
         }
-        return result
+        return hunks
     }
 
     /// 古い行（0 始まり）が新しいテキストのどの行に残ったか。削除・書き換えられた行は nil。
