@@ -10,6 +10,8 @@ struct ContentView: View {
     /// サイドバーの「付箋」欄を開いているか
     @State private var bookmarksExpanded = true
     @State private var confirmsRemovingAllBookmarks = false
+    /// 畳んでいる見出し（`OutlineFold` のキー）
+    @State private var collapsedHeadings: Set<String> = []
     /// サイドバー全体の高さ（変更・付箋の欄の上限を決める）
     @State private var sidebarHeight: CGFloat = 0
 
@@ -142,9 +144,14 @@ struct ContentView: View {
         let headingLines = outline.map(\.line)
         let changed = model.changes.sectionLines(headings: headingLines)
         let latest = model.latestChanges.sectionLines(headings: headingLines)
+        let fold = OutlineFold(outline)
+        let rows = fold.rows(collapsed: collapsedHeadings)
+        // 読んでいる見出しが畳まれて隠れていたら、見えている一番近い親に印を付ける
+        let activeLine = OutlineFold.visibleLine(of: model.activeHeadingLine, in: rows)
         return VStack(alignment: .leading, spacing: 0) {
             SidebarHeader(title: "見出し") {}
                 .padding(.top, 8)
+                .contextMenu { headingFoldMenu(fold) }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -154,23 +161,53 @@ struct ContentView: View {
                                 .padding(.horizontal, 20)
                                 .padding(.vertical, 6)
                         }
-                        ForEach(outline) { item in
+                        ForEach(rows, id: \.item.line) { row in
+                            // 畳んだ見出しの点は、隠れている見出しの節の変更もまとめて示す（変更を見逃さないように）
+                            let lines = [row.item.line] + row.hiddenLines
                             HeadingRow(
-                                item: item,
-                                depth: item.level - topLevel,
-                                isActive: item.line == model.activeHeadingLine,
-                                change: latest.contains(item.line) ? .latest : changed.contains(item.line) ? .unreviewed : nil
+                                item: row.item,
+                                depth: row.item.level - topLevel,
+                                isActive: row.item.line == activeLine,
+                                change: lines.contains(where: latest.contains) ? .latest
+                                    : lines.contains(where: changed.contains) ? .unreviewed : nil,
+                                reservesDisclosure: !fold.foldableLevels.isEmpty,
+                                isCollapsed: row.hasChildren ? row.isCollapsed : nil,
+                                toggle: { toggleHeading(row, in: fold) }
                             ) {
-                                model.selectHeading(line: item.line)
+                                model.selectHeading(line: row.item.line)
                             }
-                            .id(item.line)
+                            .id(row.item.line)
+                            .contextMenu { headingFoldMenu(fold) }
                         }
                     }
                     .padding(.bottom, 6)
                 }
-                .onChange(of: model.activeHeadingLine) { _, line in
+                .onChange(of: activeLine) { _, line in
                     if let line { proxy.scrollTo(line) }
                 }
+            }
+        }
+    }
+
+    /// ˃ のクリック。⌥ を押していたら下の階層もまとめて開閉する（Finder と同じ）。
+    private func toggleHeading(_ row: OutlineFold.Row, in fold: OutlineFold) {
+        // クリックの時点のキーを見る（NSEvent.modifierFlags は今押しているキーなので、離した後だとずれる）
+        let recursive = NSApp.currentEvent?.modifierFlags.contains(.option) == true
+        let keys = recursive ? fold.keys(under: row.key) : [row.key]
+        if row.isCollapsed {
+            collapsedHeadings.subtract(keys)
+        } else {
+            collapsedHeadings.formUnion(keys)
+        }
+    }
+
+    /// 欄の名前と各行の右クリック。文書にある段の分だけ出す（畳むものが無ければ何も出さない）。
+    @ViewBuilder
+    private func headingFoldMenu(_ fold: OutlineFold) -> some View {
+        if !fold.foldableLevels.isEmpty {
+            Button("すべて開く") { collapsedHeadings = [] }
+            ForEach(fold.foldableLevels, id: \.self) { level in
+                Button("見出し\(level)まで表示") { collapsedHeadings = fold.keys(fromLevel: level) }
             }
         }
     }
@@ -280,6 +317,92 @@ struct ContentView: View {
 /// 今読んでいる見出しはアクセント色の背景で示し（文字色は変えない）、マウスを載せた行にはそれより薄い背景を付ける。
 /// 節の中に変更があれば右端に点を出す（最新の更新は濃く、それ以前の未確認の変更は淡く）。
 /// 行は隙間なく並べ、当たり判定を行全体にするので、行をまたいでもホバーが途切れない。
+/// 見出し一覧の折り畳みの計算。どの見出しを畳んだかは行番号ではなく「親からたどった見出しの文字」で覚える
+/// （AI が上に行を足すと行番号はずれるため）。文字が変わったら開いた状態に戻る（中の変更を隠し続けるより安全）。
+struct OutlineFold {
+    struct Row: Equatable {
+        let item: OutlineItem
+        let key: String
+        let hasChildren: Bool
+        let isCollapsed: Bool
+        /// 畳まれて隠れている見出しの行
+        let hiddenLines: [Int]
+    }
+
+    private let outline: [OutlineItem]
+    private let keys: [String]
+    /// 各見出しの子孫の終わり（次に同じ段か浅い見出しが来る位置）
+    private let ends: [Int]
+
+    /// 下に見出しを持つ見出しがある段（浅い順）
+    var foldableLevels: [Int] {
+        Set(outline.indices.filter(hasChildren).map { outline[$0].level }).sorted()
+    }
+
+    init(_ outline: [OutlineItem]) {
+        self.outline = outline
+        var keys: [String] = []
+        var seen: [String: Int] = [:]
+        var path: [OutlineItem] = []
+        var ends = [Int](repeating: outline.count, count: outline.count)
+        var open: [Int] = []
+        for (index, item) in outline.enumerated() {
+            while let last = path.last, last.level >= item.level { path.removeLast() }
+            path.append(item)
+            while let last = open.last, outline[last].level >= item.level {
+                ends[last] = index
+                open.removeLast()
+            }
+            open.append(index)
+            // 区切りには見出しに現れない制御文字を使う。同じ親の下の同じ名前は順番で区別する
+            let base = path.map(\.title).joined(separator: "\u{1F}")
+            let occurrence = seen[base, default: 0]
+            seen[base] = occurrence + 1
+            keys.append("\(base)\u{1E}\(occurrence)")
+        }
+        self.keys = keys
+        self.ends = ends
+    }
+
+    private func hasChildren(_ index: Int) -> Bool {
+        ends[index] > index + 1
+    }
+
+    /// 見えている行を文書順に。畳んだ見出しの子孫は飛ばす。
+    func rows(collapsed: Set<String>) -> [Row] {
+        var rows: [Row] = []
+        var index = 0
+        while index < outline.count {
+            let foldable = hasChildren(index)
+            let isCollapsed = foldable && collapsed.contains(keys[index])
+            let next = isCollapsed ? ends[index] : index + 1
+            rows.append(Row(
+                item: outline[index], key: keys[index], hasChildren: foldable, isCollapsed: isCollapsed,
+                hiddenLines: outline[(index + 1)..<max(next, index + 1)].map(\.line)
+            ))
+            index = next
+        }
+        return rows
+    }
+
+    /// その見出しと、その下の畳める見出しのキー（⌥クリックでまとめて開閉する）
+    func keys(under key: String) -> Set<String> {
+        guard let start = keys.firstIndex(of: key) else { return [] }
+        return Set((start..<ends[start]).filter(hasChildren).map { keys[$0] })
+    }
+
+    /// その段より深い見出しが隠れるように畳むキー（「見出し2まで表示」）
+    func keys(fromLevel level: Int) -> Set<String> {
+        Set(outline.indices.filter { outline[$0].level >= level && hasChildren($0) }.map { keys[$0] })
+    }
+
+    /// line の見出しが見えていればその行、畳まれて隠れていれば見えている一番近い親の行。
+    static func visibleLine(of line: Int?, in rows: [Row]) -> Int? {
+        guard let line else { return nil }
+        return rows.last { $0.item.line <= line }?.item.line
+    }
+}
+
 private struct HeadingRow: View {
     enum Change { case unreviewed, latest }
 
@@ -287,8 +410,15 @@ private struct HeadingRow: View {
     let depth: Int
     let isActive: Bool
     let change: Change?
+    /// ˃ の場所を空けるか（畳める見出しが1つでもある文書だけ。行によって文字の頭がずれないように）
+    let reservesDisclosure: Bool
+    /// 畳んでいるか（下に見出しが無ければ nil で、˃ を出さない）
+    let isCollapsed: Bool?
+    let toggle: () -> Void
     let action: () -> Void
     @State private var isHovering = false
+
+    private static let disclosureWidth: CGFloat = 14
 
     var body: some View {
         Button(action: action) {
@@ -305,7 +435,7 @@ private struct HeadingRow: View {
                         .help(change == .latest ? "最新の更新があります" : "比較の基準から変更があります")
                 }
             }
-            .padding(.leading, CGFloat(depth) * 14)
+            .padding(.leading, CGFloat(depth) * 14 + (reservesDisclosure ? Self.disclosureWidth : 0))
             .padding(.vertical, depth >= 2 ? 4 : 5)
             .padding(.horizontal, 10)
             .background(
@@ -315,6 +445,23 @@ private struct HeadingRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // 行のボタンの中に入れ子にせず重ねる（˃ のクリックで見出しへ移動しないように）
+        .overlay(alignment: .leading) {
+            if let isCollapsed {
+                Button(action: toggle) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                        .frame(width: Self.disclosureWidth + 6)
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, CGFloat(depth) * 14 + 5)
+                .help(isCollapsed ? "この見出しの下を開く（⌥で下の階層も）" : "この見出しの下を畳む（⌥で下の階層も）")
+            }
+        }
         .padding(.horizontal, 10)
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
