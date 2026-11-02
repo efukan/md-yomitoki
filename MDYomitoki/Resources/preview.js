@@ -532,7 +532,9 @@ const CHANGE_GAP = 6;    // 本文の列の左端から線までの距離
 const CHANGE_WIDTH = 3;  // 線の太さ
 const CHANGE_HIT = 5;    // 線の左右に広げる当たり判定
 const CHANGE_ZONE = CHANGE_GAP + CHANGE_WIDTH + CHANGE_HIT;  // 本文の左端からの当たり判定の幅
-let removedEntries = [];  // [{ line, count, text, deletion: { el, before } | undefined }]
+let removedEntries = [];  // [{ line, count, text, inline（文字単位の差分。比べる前は undefined、比べられなければ null）, deletion: { el, before } | undefined }]
+let inlineRequest = null;  // 文字単位の差分の返事を待っている吹き出し { id, mark, mouseY, entries }
+let inlineRequestId = 0;
 const removedPopover = document.createElement('div');
 removedPopover.id = 'removed-pop';
 removedPopover.hidden = true;
@@ -542,6 +544,7 @@ let popoverTimer = 0;
 function placeChangeMarks() {
   for (const mark of gutter.querySelectorAll('.cb, .cd, .cdl, .cdline')) mark.remove();
   removedPopover.hidden = true;
+  inlineRequest = null;
   const x = columnLeft() + window.scrollX - CHANGE_GAP - CHANGE_WIDTH;
   const y = window.scrollY;
   // 縦に重なる・接する要素は1本の線にまとめる。最新の更新は未確認の変更の上に重ねる。
@@ -616,21 +619,28 @@ function placeChangeMarks() {
 // 本文の列の左端にそろえ、マウスの少し下に出す。下に収まらなければ上に出す。
 function showRemoved(mark, mouseY) {
   clearTimeout(popoverTimer);
-  const count = mark._entries.reduce((sum, e) => sum + e.count, 0);
-  const title = document.createElement('div');
-  title.className = 'rp-title';
-  const children = [title];
-  if (mark._deleted) {
-    title.textContent = `削除された ${count}行`;
-  } else if (count === 0) {
-    title.textContent = '追加された行（変更前の内容はありません）';
-  } else {
-    title.textContent = `変更前の内容（${count}行）`;
+  // 書き換えは文字単位の差分を Swift に頼み、返事が来てから出す（結果は次に印が変わるまで覚えておく）
+  const entries = mark._deleted ? [] : mark._entries.filter((e) => e.inline === undefined);
+  if (entries.length > 0) {
+    inlineRequest = { id: ++inlineRequestId, mark, mouseY, entries };
+    post({ type: 'inlineDiffs', id: inlineRequest.id, lines: entries.map((e) => e.line) });
+    return;
   }
-  if (count > 0) {
-    const text = document.createElement('pre');
-    text.textContent = mark._entries.map((e) => e.text).join('\n⋯\n');
-    children.push(text);
+  const count = mark._entries.reduce((sum, e) => sum + e.count, 0);
+  let children;
+  if (mark._deleted) {
+    children = [removedTitle(`削除された ${count}行`), removedText(mark._entries.map((e) => e.text).join('\n⋯\n'))];
+  } else if (count === 0) {
+    children = [removedTitle('追加された行（変更前の内容はありません）')];
+  } else {
+    // かたまりごとに変更前と変更後を並べ、組の間に線を引く
+    children = mark._entries.flatMap((e, index) => [
+      ...(index > 0 ? [document.createElement('hr')] : []),
+      removedTitle('変更前'),
+      ...(e.inline
+        ? [removedParts(e.inline.old, 'rp-old'), removedTitle('変更後'), removedParts(e.inline.new, 'rp-new')]
+        : [removedText(e.text), removedNote('変更が大きいため、文字ごとには比べていません')]),
+    ]);
   }
   removedPopover.replaceChildren(...children);
   removedPopover.classList.toggle('rp-del', !!mark._deleted);
@@ -643,8 +653,50 @@ function showRemoved(mark, mouseY) {
   removedPopover.style.top = `${window.scrollY + top}px`;
 }
 
+function removedTitle(text) {
+  const title = document.createElement('div');
+  title.className = 'rp-title';
+  title.textContent = text;
+  return title;
+}
+
+function removedNote(text) {
+  const note = document.createElement('div');
+  note.className = 'rp-note';
+  note.textContent = text;
+  return note;
+}
+
+function removedText(text) {
+  const pre = document.createElement('pre');
+  pre.textContent = text;
+  return pre;
+}
+
+function inlineDiffsReady(id, diffs) {
+  if (inlineRequest?.id !== id) return;
+  const { mark, mouseY, entries } = inlineRequest;
+  inlineRequest = null;
+  entries.forEach((entry, index) => { entry.inline = diffs[index]; });
+  showRemoved(mark, mouseY);
+}
+
+// 変わった文字だけ span で囲む（文書の文字なので textContent で入れる）
+function removedParts(parts, className) {
+  const pre = document.createElement('pre');
+  pre.append(...parts.map(([text, changed]) => {
+    if (!changed) return text;
+    const span = document.createElement('span');
+    span.className = className;
+    span.textContent = text;
+    return span;
+  }));
+  return pre;
+}
+
 // 吹き出しの中の文字を選べるよう、印から吹き出しへマウスを移す間は消さない
 function hideRemovedSoon() {
+  inlineRequest = null;
   clearTimeout(popoverTimer);
   popoverTimer = setTimeout(() => { removedPopover.hidden = true; }, 200);
 }

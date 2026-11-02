@@ -43,7 +43,7 @@ struct LineDiffTests {
         // b,c → B（書き換え）、e → 削除して f を追加（書き換え）
         #expect(changes.changed == [2...2, 4...4])
         #expect(changes.deletedBefore.isEmpty)
-        #expect(changes.removed == [2: RemovedLines(["b", "c"]), 4: RemovedLines(["e"])])
+        #expect(changes.removed == [2: RemovedLines(["b", "c"], replacement: ["B"]), 4: RemovedLines(["e"], replacement: ["f"])])
         #expect(changes.removed[2]?.text == "b\nc")
         #expect(changes.removed[2]?.lineCount == 2)
     }
@@ -72,6 +72,108 @@ struct LineDiffTests {
         let removed = LineDiff.changes(from: old, to: "").removed[1]
         #expect(removed?.lineCount == 250)
         #expect(removed?.text.hasSuffix("200\n…（ほか 50行）") == true)
+    }
+
+    /// 変わった所を [ ] で囲んで文字列にする
+    private func marked(_ segments: [InlineDiff.Segment]) -> String {
+        segments.map { $0.changed ? "[\($0.text)]" : $0.text }.joined()
+    }
+
+    private func inline(_ old: String, _ new: String) -> InlineDiff? {
+        LineDiff.inlineDiff(from: old, to: new)
+    }
+
+    @Test func inlineDiffMarksOnlyTheChangedCharacters() throws {
+        let diff = try #require(inline("本番の手順を書き直す。", "本番の手順を見直す。"))
+        #expect(marked(diff.old) == "本番の手順を[書き]直す。")
+        #expect(marked(diff.new) == "本番の手順を[見]直す。")
+    }
+
+    @Test func inlineDiffHandlesPureInsertionAndDeletion() throws {
+        let inserted = try #require(inline("重要です", "**重要**です"))
+        #expect(marked(inserted.old) == "重要です")
+        #expect(marked(inserted.new) == "[**]重要[**]です")
+        let deleted = try #require(inline("前の文。消す文。後の文。", "前の文。後の文。"))
+        #expect(marked(deleted.old) == "前の文。[消す文。]後の文。")
+        #expect(marked(deleted.new) == "前の文。後の文。")
+    }
+
+    @Test func inlineDiffDoesNotSplitGraphemes() throws {
+        // か＋結合濁点（NFD）と か は別の1文字として扱う
+        let diff = try #require(inline("これはか\u{3099}です", "これはかです"))
+        #expect(marked(diff.old) == "これは[か\u{3099}]です")
+        #expect(marked(diff.new) == "これは[か]です")
+    }
+
+    @Test func inlineDiffAbsorbsShortCommonRunsBetweenChanges() throws {
+        // 「の」だけが一致しても、変更を分けない
+        let diff = try #require(inline("共通の文章あのい共通の文章", "共通の文章かのき共通の文章"))
+        #expect(marked(diff.old) == "共通の文章[あのい]共通の文章")
+        #expect(marked(diff.new) == "共通の文章[かのき]共通の文章")
+    }
+
+    @Test func inlineDiffGivesUpOnRewrites() {
+        #expect(inline("今日は晴れて気持ちのよい朝だった", "明日の会議の資料を作って送る") == nil)
+        #expect(inline("同じ", "同じ") == nil)
+        #expect(inline("", "追加") == nil)
+    }
+
+    @Test func inlineDiffIsBoundedBySize() {
+        // 前後の共通部分を除いた範囲が上限を超える
+        let huge = String(repeating: "あ", count: LineDiff.inlineLimit + 1)
+        let other = String(repeating: "い", count: LineDiff.inlineLimit + 1)
+        #expect(inline("共通" + huge, "共通" + other) == nil)
+        // 前後の共通部分は長くても上限に数えない
+        let long = String(repeating: "あ", count: 10_000)
+        #expect(inline(long + "い" + long, long + "う" + long) != nil)
+        // 足しただけなら長くても比べられる
+        #expect(inline("共通", "共通" + huge + other) != nil)
+    }
+
+    @Test func manyRewrittenParagraphsAreAllComparable() {
+        // 文書の後ろの段落でも、前の段落の直しに影響されず比べられる
+        let paragraphs = (1...60).map { n in "段落\(n)の" + String(repeating: "本文を書いた。", count: 60) }
+        let old = paragraphs.joined(separator: "\n\n")
+        let new = paragraphs.map { "言い換え" + $0.dropFirst(4).dropLast(4) + "言い換え" }.joined(separator: "\n\n")
+        let changes = LineDiff.changes(from: old, to: new)
+        #expect(changes.changed.count == 60)
+        #expect(changes.changed.allSatisfy { changes.removed[$0.lowerBound]?.inlineDiff != nil })
+    }
+
+    @Test func inlineDiffElidesLongCommonRunsOnlyInLongText() throws {
+        let body = String(repeating: "あ", count: 200)
+        let diff = try #require(inline(body + "い" + body, body + "う" + body))
+        let context = String(repeating: "あ", count: LineDiff.inlineContext)
+        #expect(marked(diff.old) == "…\(context)[い]\(context)…")
+        #expect(marked(diff.new) == "…\(context)[う]\(context)…")
+        // 短ければ全文を出す
+        let short = String(repeating: "あ", count: 100)
+        let whole = try #require(inline(short + "い" + short, short + "う" + short))
+        #expect(marked(whole.old) == "\(short)[い]\(short)")
+    }
+
+    @Test func inlineDiffsAttachOnlyToRewrites() {
+        let old = "残る\n段落を書き直した\n残る2\n消える段落\n最後"
+        let new = "残る\n段落を見直した\n残る2\n最後"
+        let changes = LineDiff.changes(from: old, to: new)
+        #expect(changes.changed == [2...2])
+        #expect(changes.deletedBefore == [4])
+        #expect(changes.removed[2]?.replacement == "段落を見直した")
+        let rewritten = changes.removed[2]?.inlineDiff
+        #expect(rewritten.map { marked($0.old) } == "段落を[書き]直した")
+        #expect(rewritten.map { marked($0.new) } == "段落を[見]直した")
+        // 削除には比べる相手が無い
+        #expect(changes.removed[4]?.text == "消える段落")
+        #expect(changes.removed[4]?.replacement == nil)
+        #expect(changes.removed[4]?.inlineDiff == nil)
+    }
+
+    @Test func inlineDiffsSkipTruncatedRemovals() {
+        let old = (1...250).map { "行\($0)" }.joined(separator: "\n")
+        let new = (1...250).map { "行\($0)x" }.joined(separator: "\n")
+        let changes = LineDiff.changes(from: old, to: new)
+        #expect(changes.removed[1]?.lineCount == 250)
+        #expect(changes.removed[1]?.inlineDiff == nil)
     }
 
     @Test func jumpTargetsMoveBothWaysAndWrapAround() {

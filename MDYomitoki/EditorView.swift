@@ -544,6 +544,9 @@ final class EditorMarksView: NSView {
     private var popover: NSPopover?
     private var shownKey: MarkKey?
     private var watchTask: Task<Void, Never>?
+    /// 文字単位の差分を計算している間の印（マウスを動かすたびに計算し直さないように）
+    private var pendingKey: MarkKey?
+    private var inlineTask: Task<Void, Never>?
 
     private enum Mark {
         case bar(rect: NSRect, latest: Bool, lines: ClosedRange<Int>)
@@ -781,7 +784,7 @@ final class EditorMarksView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        guard let (key, anchor) = hit(at: point), key != shownKey else { return }
+        guard let (key, anchor) = hit(at: point), key != shownKey, key != pendingKey else { return }
         showPopover(for: key, anchor: anchor)
     }
 
@@ -809,22 +812,35 @@ final class EditorMarksView: NSView {
     }
 
     private func showPopover(for key: MarkKey, anchor: NSRect) {
-        popover?.close()
         let removed = marks.changes.removed
-        let entries: [RemovedLines]
         if key.deletion {
-            entries = removed[key.line].map { [$0] } ?? []
-        } else {
-            let lines = marks.changes.changed.first { $0.lowerBound == key.line }
-                ?? marks.latest.changed.first { $0.lowerBound == key.line } ?? key.line...key.line
-            let deleted = Set(marks.changes.deletedBefore)
-            entries = removed.filter { lines.contains($0.key) && !deleted.contains($0.key) }.sorted { $0.key < $1.key }.map(\.value)
+            let entry = removed[key.line]
+            present(RemovedLinesView(title: "削除された \(entry?.lineCount ?? 0)行", text: entry?.text), for: key, anchor: anchor)
+            return
         }
-        let count = entries.reduce(0) { $0 + $1.lineCount }
-        let title = key.deletion ? "削除された \(count)行"
-            : count == 0 ? "追加された行（変更前の内容はありません）" : "変更前の内容（\(count)行）"
-        let text = entries.isEmpty ? nil : entries.map(\.text).joined(separator: "\n⋯\n")
-        let host = NSHostingController(rootView: RemovedLinesView(title: title, text: text, deleted: key.deletion))
+        let lines = marks.changes.changed.first { $0.lowerBound == key.line }
+            ?? marks.latest.changed.first { $0.lowerBound == key.line } ?? key.line...key.line
+        let deleted = Set(marks.changes.deletedBefore)
+        let entries = removed.filter { lines.contains($0.key) && !deleted.contains($0.key) }.sorted { $0.key < $1.key }.map(\.value)
+        if entries.isEmpty {
+            present(RemovedLinesView(title: "追加された行（変更前の内容はありません）"), for: key, anchor: anchor)
+            return
+        }
+        // 書き換えは文字単位の差分をメインスレッドの外で計算してから出す
+        pendingKey = key
+        inlineTask?.cancel()
+        inlineTask = Task { [weak self] in
+            let diffs = await Task.detached { entries.map(\.inlineDiff) }.value
+            guard let self, !Task.isCancelled else { return }
+            let rewrites = zip(entries, diffs).map { RemovedLinesView.Rewrite(text: $0.text, inline: $1) }
+            self.present(RemovedLinesView(rewrites: rewrites), for: key, anchor: anchor)
+        }
+    }
+
+    private func present(_ content: RemovedLinesView, for key: MarkKey, anchor: NSRect) {
+        popover?.close()
+        pendingKey = nil
+        let host = NSHostingController(rootView: content)
         host.sizingOptions = [.preferredContentSize]
         let popover = NSPopover()
         popover.behavior = .applicationDefined
@@ -856,6 +872,8 @@ final class EditorMarksView: NSView {
     }
 
     func closePopover() {
+        inlineTask?.cancel()
+        pendingKey = nil
         watchTask?.cancel()
         popover?.close()
         popover = nil
@@ -865,34 +883,75 @@ final class EditorMarksView: NSView {
 
 /// エディタの吹き出しの中身（変更前の内容・削除された行）。長いときはスクロールする。
 private struct RemovedLinesView: View {
-    let title: String
-    let text: String?
-    let deleted: Bool
+    struct Rewrite {
+        let text: String
+        let inline: InlineDiff?
+    }
+
+    /// 削除と追加の見出し（書き換えには無い）
+    var title: String?
+    /// 削除された行
+    var text: String?
+    var rewrites: [Rewrite] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            if let text {
-                let body = Text(text)
-                    .font(.system(size: 12, design: .monospaced))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 8)
-                    .overlay(alignment: .leading) {
-                        Rectangle().fill(Color(nsColor: deleted ? .systemRed : .systemOrange)).frame(width: 3)
-                    }
-                if text.split(separator: "\n", omittingEmptySubsequences: false).count > 16 {
-                    ScrollView { body }.frame(height: 280)
+            if let title { heading(title) }
+            if let text { block(AttributedString(text), bar: .systemRed) }
+            // かたまりごとに変更前と変更後を並べ、組の間に線を引く
+            ForEach(Array(rewrites.enumerated()), id: \.offset) { index, rewrite in
+                if index > 0 { Divider().padding(.vertical, 4) }
+                heading("変更前")
+                if let inline = rewrite.inline {
+                    block(attributed(inline.old, color: .systemRed.withAlphaComponent(0.35)), bar: .systemOrange)
+                    heading("変更後").padding(.top, 4)
+                    block(attributed(inline.new, color: .systemOrange.withAlphaComponent(0.45)), bar: .systemOrange)
                 } else {
-                    body
+                    block(AttributedString(rewrite.text), bar: .systemOrange)
+                    Text("変更が大きいため、文字ごとには比べていません")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
                 }
             }
         }
         .padding(10)
         .frame(width: 380, alignment: .leading)
+        // 既定の透けた背景だと後ろの本文の文字が重なって読みにくく、本文と同じ白だと境目が無くなるので、不透明の淡い灰色にする
+        .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    private func heading(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+    }
+
+    private func attributed(_ segments: [InlineDiff.Segment], color: NSColor) -> AttributedString {
+        segments.reduce(into: AttributedString()) { result, segment in
+            var part = AttributedString(segment.text)
+            if segment.changed { part.backgroundColor = Color(nsColor: color) }
+            result += part
+        }
+    }
+
+    @ViewBuilder private func block(_ content: AttributedString, bar: NSColor) -> some View {
+        let plain = String(content.characters)
+        let body = Text(content)
+            .font(.system(size: 13))
+            .foregroundStyle(Color(nsColor: .textColor))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 8)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(Color(nsColor: bar)).frame(width: 3)
+            }
+        if plain.count > 600 || plain.split(separator: "\n", omittingEmptySubsequences: false).count > 16 {
+            ScrollView { body }.frame(height: 280)
+        } else {
+            body
+        }
     }
 }
 

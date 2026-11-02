@@ -306,6 +306,15 @@ struct PreviewView: NSViewRepresentable {
             case "toggleBookmark":
                 guard let lines = body["lines"] as? [Int], !lines.isEmpty else { return }
                 model.toggleBookmark(lines: lines)
+            case "inlineDiffs":
+                // 吹き出しを開く時に、そのかたまりの分だけ文字単位で比べる
+                guard let id = body["id"] as? Int, let lines = body["lines"] as? [Int] else { return }
+                let entries = lines.map { marks.changes.removed[$0] }
+                Task { [weak self] in
+                    let diffs = await Task.detached { entries.map { $0?.inlineDiff } }.value
+                    guard let self, self.isReady else { return }
+                    self.callJS("inlineDiffsReady(id, diffs)", ["id": id, "diffs": diffs.map { $0?.jsValue ?? NSNull() as Any }])
+                }
             case "selection":
                 model.selectionCount = Markdown.countChars(body["text"] as? String ?? "")
             case "copy":
@@ -372,6 +381,15 @@ struct PreviewMarks: Equatable {
             "deleted": changes.deletedBefore,
             "removed": changes.removed.sorted { $0.key < $1.key }.map { [$0.key, $0.value.lineCount, $0.value.text] as [Any] },
             "bookmarks": bookmarks,
+        ]
+    }
+}
+
+extension InlineDiff {
+    var jsValue: [String: Any] {
+        [
+            "old": old.map { [$0.text, $0.changed] as [Any] },
+            "new": new.map { [$0.text, $0.changed] as [Any] },
         ]
     }
 }

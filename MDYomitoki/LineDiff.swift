@@ -86,17 +86,160 @@ extension LineChanges {
 struct RemovedLines: Equatable {
     var lineCount: Int
     var text: String
+    /// 書き換えた後の行（文字単位の差分の相手）。削除には無い。省略して比べられない時も持たない。
+    var replacement: String?
 
     static let maxLines = 200
 
-    init(_ lines: [Substring]) {
+    init(_ lines: [Substring], replacement: ArraySlice<Substring>? = nil) {
         lineCount = lines.count
         text = lines.prefix(Self.maxLines).joined(separator: "\n")
-        if lines.count > Self.maxLines { text += "\n…（ほか \(lines.count - Self.maxLines)行）" }
+        if lines.count > Self.maxLines {
+            text += "\n…（ほか \(lines.count - Self.maxLines)行）"
+        } else {
+            self.replacement = replacement?.joined(separator: "\n")
+        }
+    }
+
+    /// 文字単位の差分。吹き出しを開く時にメインスレッドの外で計算する（見ないかたまりの分は計算しない）。
+    var inlineDiff: InlineDiff? {
+        replacement.flatMap { LineDiff.inlineDiff(from: text, to: $0) }
     }
 }
 
+/// 書き換えの前後の文字列を、変わった部分とそれ以外に分けたもの（吹き出しで強調する）。
+struct InlineDiff: Equatable {
+    struct Segment: Equatable {
+        let text: String
+        let changed: Bool
+    }
+
+    let old: [Segment]
+    let new: [Segment]
+}
+
 enum LineDiff {
+    /// 文字単位で比べる範囲（前後の共通部分を除く）の片側の文字数の上限。
+    /// 全く違う文字列どうしの比較は文字数の2乗で重くなる（片側 1000 字で Debug ビルド 約 0.3 秒）。
+    static let inlineLimit = 1000
+    /// 共通の文字が短い方の文字列のこの割合に満たなければ、書き直しとみなして強調しない（細切れになるだけなので）。
+    static let inlineMinCommon = 0.5
+    /// 片側がこの文字数を超える時だけ、長い共通部分を省いて変わった所の前後を残す（吹き出しに変わった所が収まるように）。
+    static let inlineElideOver = 300
+    static let inlineContext = 40
+
+    /// 書記素単位で比べる（濁点などを分けない）。比べない時は nil。
+    static func inlineDiff(from old: String, to new: String) -> InlineDiff? {
+        let a = Array(old), b = Array(new)
+        guard !a.isEmpty, !b.isEmpty, a != b else { return nil }
+        // 1段落の中の小さな直しがほとんどなので、前後の共通部分を除いてから比べる
+        let shorter = min(a.count, b.count)
+        var prefix = 0
+        while prefix < shorter, a[prefix] == b[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < shorter - prefix, a[a.count - 1 - suffix] == b[b.count - 1 - suffix] { suffix += 1 }
+        let aMiddle = Array(a[prefix..<(a.count - suffix)]), bMiddle = Array(b[prefix..<(b.count - suffix)])
+        var runs = [InlineRun(count: prefix)]
+        if aMiddle.isEmpty || bMiddle.isEmpty {
+            // 足しただけ・消しただけなら比べるまでもない（長い段落を足しても上限に数えない）
+            runs.append(InlineRun(old: aMiddle.count, new: bMiddle.count))
+        } else {
+            guard aMiddle.count <= inlineLimit, bMiddle.count <= inlineLimit else { return nil }
+            runs += inlineRuns(from: aMiddle, to: bMiddle)
+        }
+        runs.append(InlineRun(count: suffix))
+        runs = absorbShortCommonRuns(runs.filter { $0.old > 0 || $0.new > 0 })
+
+        let common = runs.reduce(0) { $0 + ($1.common ? $1.old : 0) }
+        guard Double(common) >= inlineMinCommon * Double(shorter) else { return nil }
+        return InlineDiff(old: segments(a, runs.map { ($0.old, $0.common) }), new: segments(b, runs.map { ($0.new, $0.common) }))
+    }
+
+    /// 共通の文字のかたまり（common。old と new は同じ数）か、変わった文字のかたまり。
+    private struct InlineRun {
+        var old: Int
+        var new: Int
+        var common: Bool
+
+        init(count: Int) {
+            old = count
+            new = count
+            common = true
+        }
+
+        init(old: Int, new: Int) {
+            self.old = old
+            self.new = new
+            common = false
+        }
+    }
+
+    private static func inlineRuns(from a: [Character], to b: [Character]) -> [InlineRun] {
+        var removed = Set<Int>()
+        var inserted = Set<Int>()
+        for change in b.difference(from: a) {
+            switch change {
+            case .remove(let offset, _, _): removed.insert(offset)
+            case .insert(let offset, _, _): inserted.insert(offset)
+            }
+        }
+        var runs: [InlineRun] = []
+        var i = 0, j = 0
+        while i < a.count || j < b.count {
+            let start = (i, j)
+            while removed.contains(i) || inserted.contains(j) {
+                if removed.contains(i) { i += 1 } else { j += 1 }
+            }
+            if i > start.0 || j > start.1 { runs.append(InlineRun(old: i - start.0, new: j - start.1)) }
+            let same = i
+            while i < a.count, j < b.count, !removed.contains(i), !inserted.contains(j) {
+                i += 1
+                j += 1
+            }
+            if i > same { runs.append(InlineRun(count: i - same)) }
+        }
+        return runs
+    }
+
+    /// 変わった所にはさまれた共通のかたまりは、両隣の変更より長くなければ変更に含める
+    /// （「の」「は」だけが一致して強調が細切れになるのを防ぐ）。文書の先頭と末尾の共通部分は残す。
+    /// 両隣とも足しただけ・消しただけなら間の文字は本当に変わっていないので含めない（`重要` → `**重要**`）。
+    private static func absorbShortCommonRuns(_ input: [InlineRun]) -> [InlineRun] {
+        var runs = input
+        var index = 1
+        while index + 1 < runs.count {
+            let before = runs[index - 1], run = runs[index], after = runs[index + 1]
+            let onlyAdded = before.old == 0 && after.old == 0, onlyRemoved = before.new == 0 && after.new == 0
+            guard run.common, !onlyAdded, !onlyRemoved,
+                  run.old <= max(before.old, before.new), run.old <= max(after.old, after.new) else {
+                index += 1
+                continue
+            }
+            runs[(index - 1)...(index + 1)] = [InlineRun(old: before.old + run.old + after.old, new: before.new + run.new + after.new)]
+            // 変更が長くなったので、一つ前の共通のかたまりも含められるようになったかもしれない
+            index = max(1, index - 2)
+        }
+        return runs
+    }
+
+    private static func segments(_ characters: [Character], _ runs: [(count: Int, common: Bool)]) -> [InlineDiff.Segment] {
+        let elide = characters.count > inlineElideOver
+        var segments: [InlineDiff.Segment] = []
+        var start = 0
+        for (index, run) in runs.enumerated() where run.count > 0 {
+            let part = characters[start..<(start + run.count)]
+            start += run.count
+            guard run.common, elide, run.count > inlineContext * 2 else {
+                segments.append(.init(text: String(part), changed: !run.common))
+                continue
+            }
+            let head = index == 0 ? "" : String(part.prefix(inlineContext))
+            let tail = index == runs.count - 1 ? "" : String(part.suffix(inlineContext))
+            segments.append(.init(text: head + "…" + tail, changed: false))
+        }
+        return segments
+    }
+
     static func changes(from old: String, to new: String) -> LineChanges {
         guard old != new else { return LineChanges() }
         let oldLines = old.split(separator: "\n", omittingEmptySubsequences: false)
@@ -149,7 +292,7 @@ enum LineDiff {
                 result.deletedBefore.append(line)
                 lastDeletion = (line, gone)
             }
-            if !gone.isEmpty { result.removed[line] = RemovedLines(gone) }
+            if !gone.isEmpty { result.removed[line] = RemovedLines(gone, replacement: j > start ? newLines[start..<j] : nil) }
         }
         return result
     }

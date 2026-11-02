@@ -489,9 +489,25 @@ html.line-numbers { --content-left: 72px; }
   border-radius: 0;
   border-left: 3px solid var(--chg-latest);
   white-space: pre-wrap;
-  font-size: 12px;
+  font-family: inherit;
+  font-size: 13px;
 }
 #removed-pop.rp-del pre { border-left-color: var(--del); }
+#removed-pop pre + .rp-title { margin-top: 8px; }
+#removed-pop hr {
+  height: 0;
+  margin: 10px 0 8px;
+  border: 0;
+  border-top: 1px solid var(--separator);
+}
+.rp-note {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+/* 文字単位の差分：変更前で消えた文字は赤、変更後で入った文字はオレンジ。1文字の変更でも見つかる濃さにする */
+.rp-old { background: rgba(255, 69, 58, 0.35); border-radius: 2px; }
+.rp-new { background: rgba(255, 149, 0, 0.45); border-radius: 2px; }
 
 /* ルーラー：右端に文書全体の変更の位置を並べる（検索中は一致の位置も重ねる）。クリックの当たり判定は 10px。 */
 #ruler {
