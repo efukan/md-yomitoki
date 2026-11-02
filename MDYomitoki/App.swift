@@ -398,6 +398,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { [self] in
             guard !isRunningTests && controllers.isEmpty else { return }
             if AppSettings.shared.restoreOpenFiles { restoreSession() }
+            // 開き直さなかった文書の基準の写しを残さない（復元をオフにしている時・記録が無くなった時）
+            BaselineStore.shared.removeAll(except: controllers.map(\.model.url.path))
             if controllers.isEmpty { RecentFilesPanel.shared.show() }
         }
     }
@@ -406,11 +408,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 全部閉じる直前の記録をそのまま使う。
     func applicationWillTerminate(_ notification: Notification) {
         recordSessionIfAnyOpen()
+        BaselineStore.shared.waitUntilFinished()
     }
 
     private func recordSessionIfAnyOpen() {
         guard !isRunningTests, !controllers.isEmpty else { return }
-        currentSession().save()
+        recordSession()
+    }
+
+    /// 今の並びを記録し、記録から外れたタブの基準の写しを消す（全部閉じた時は記録を残すので、写しも残る）。
+    private func recordSession() {
+        let session = currentSession()
+        session.save()
+        BaselineStore.shared.removeAll(except: session.paths)
     }
 
     /// 開いているファイルを、ウィンドウごと（タブの並び順）にまとめる。
@@ -442,7 +452,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isRestoringSession = true
         defer {
             isRestoringSession = false
-            currentSession().save()
+            recordSession()
         }
         for saved in session.windows {
             for (index, path) in saved.paths.enumerated() {

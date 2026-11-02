@@ -53,6 +53,8 @@ struct OpenFilesSession: Codable, Equatable {
     /// 一番手前（キー）のウィンドウのファイル
     var front: String?
 
+    var paths: [String] { windows.flatMap(\.paths) }
+
     private static let key = "openFilesSession"
 
     static func load() -> OpenFilesSession? {

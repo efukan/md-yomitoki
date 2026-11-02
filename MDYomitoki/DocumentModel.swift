@@ -1,9 +1,10 @@
 import AppKit
+import CryptoKit
 import Observation
 
 /// 変更ハイライトの比較の基準
 enum BaselineSource: Hashable {
-    /// 開いた時点、または最後に「確認済み」にした時点
+    /// 開いた時点、または最後に「確認済み」にした時点（タブを開いたまま終了したら、次回も続きから）
     case reviewed
     /// git の最後のコミット（HEAD）
     case gitHead
@@ -83,8 +84,10 @@ final class DocumentModel {
     @ObservationIgnored private var savedText = ""
     @ObservationIgnored private var format = FileFormat()
     private(set) var baselineSource = BaselineSource.reviewed
-    /// 開いた時点か、最後に「確認済み」にした時点の内容
+    /// 開いた時点か、最後に「確認済み」にした時点の内容。保存済みの写し（`BaselineStore`）があれば、その内容。
     @ObservationIgnored private var reviewedBaseline = ""
+    /// 保存済みの基準を読んでいる途中（読み終わってから最初の描画を作る）
+    @ObservationIgnored private var baselineLoadTask: Task<Void, Never>?
     /// git HEAD 時点の内容
     @ObservationIgnored private var gitBaseline: String?
     @ObservationIgnored private var watcher: FileWatcher?
@@ -151,7 +154,7 @@ final class DocumentModel {
             (text, format) = try Self.readText(at: url)
             savedText = text
             reviewedBaseline = text
-            refreshDerived()
+            loadReviewedBaseline()
             loadError = nil
             refreshModifiedAt()
             let stored = BookmarkStore.load(for: url)
@@ -172,8 +175,29 @@ final class DocumentModel {
         watcher?.stop()
         watcher = nil
         renderTask?.cancel()
+        baselineLoadTask?.cancel()
         saveScrollTask?.cancel()
         ScrollMemory.save(scrollPosition, for: url)
+    }
+
+    /// 保存済みの基準があれば使い（閉じている間の書き換えも未確認の変更になる）、無ければ開いた時点の内容を保存する。
+    /// 最初の描画はこの後に作る（印の無い本文を一瞬見せないように）。
+    private func loadReviewedBaseline() {
+        let path = url.path
+        baselineLoadTask = Task { [weak self] in
+            let stored = await BaselineStore.shared.load(for: path)
+            guard let self else { return }
+            // 読んでいる間に「確認済み」にしていたら、そちらを優先する
+            if !Task.isCancelled {
+                if let stored {
+                    self.reviewedBaseline = stored
+                } else {
+                    BaselineStore.shared.save(self.reviewedBaseline, for: path)
+                }
+            }
+            self.baselineLoadTask = nil
+            self.refreshDerived()
+        }
     }
 
     // MARK: 外部更新
@@ -550,7 +574,9 @@ final class DocumentModel {
     /// 確認済み：今の内容を新しいベースラインにする。
     /// git HEAD と比較していた場合も、今の内容を基準にする（＝通常の基準に戻る）。
     func markAsReviewed() {
+        baselineLoadTask?.cancel()
         reviewedBaseline = text
+        BaselineStore.shared.save(text, for: url.path)
         externalUpdateCount = 0
         baselineSource = .reviewed
         changes = LineChanges()
@@ -926,6 +952,78 @@ struct ScrollPosition: Equatable {
     var ratio = 0.0
 
     func contains(_ line: Int) -> Bool { (self.line...max(self.line, endLine)).contains(line) }
+}
+
+/// 「確認済み」の基準の写しを、開いているタブの文書の分だけ Application Support に保存する（ファイルパスごとに1つ。本文の内部表現＝LF のまま）。
+/// 読み書きと掃除はメインスレッドの外で、頼んだ順に行う（開く・閉じるが続いても、消した後に古い写しを読まないように）。
+struct BaselineStore: Sendable {
+    /// これより大きい基準は保存しない（開いているタブの数だけ写しを持つので、大きな文書でディスクを使いすぎないように）。
+    /// Finder の表示（1000 単位）とそろえる。
+    static let maxSize = 1_000_000
+
+    static let shared = BaselineStore(directory: URL.applicationSupportDirectory
+        .appending(path: Bundle.main.bundleIdentifier ?? "MDYomitoki")
+        .appending(path: "Baselines"))
+
+    let directory: URL
+    private let queue = DispatchQueue(label: "jp.efukan.mdyomitoki.baselines", qos: .userInitiated)
+
+    init(directory: URL) {
+        self.directory = directory
+    }
+
+    static func canStore(_ text: String) -> Bool {
+        text.utf8.count <= maxSize
+    }
+
+    /// 長いパスでも名前の上限に収まり、パスの文字をそのまま名前に残さないよう、ハッシュにする。
+    /// 拡張子を付けない（Spotlight が本文を調べないように）。
+    func fileURL(for path: String) -> URL {
+        let hash = SHA256.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
+        return directory.appending(path: hash)
+    }
+
+    /// 無ければ、壊れていれば（大きすぎる・UTF-8 でない）nil。
+    func load(for path: String) async -> String? {
+        let url = fileURL(for: path)
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                let data = try? Data(regularFileAt: url, limit: Int64(Self.maxSize))
+                continuation.resume(returning: data.flatMap { String(data: $0, encoding: .utf8) })
+            }
+        }
+    }
+
+    /// 上限を超える基準は保存せず、前の写しも消す（次に開いた時は、確認済みにする前の古い基準ではなく開いた時点を基準にする）。
+    func save(_ text: String, for path: String) {
+        let url = fileURL(for: path), directory = directory
+        queue.async {
+            guard Self.canStore(text) else {
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            // 書いている途中で落ちても、半端な基準を残さない
+            try? Data(text.utf8).write(to: url, options: .atomic)
+        }
+    }
+
+    /// paths（タブの記録に残っているファイル）以外の写しを消す。
+    func removeAll(except paths: some Sequence<String>) {
+        let keep = Set(paths.map { fileURL(for: $0).lastPathComponent })
+        let directory = directory
+        queue.async {
+            let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+            for file in files where !keep.contains(file.lastPathComponent) {
+                try? FileManager.default.removeItem(at: file)
+            }
+        }
+    }
+
+    /// 頼んだ読み書きが終わるまで待つ（終了する時に、書きかけのまま落ちないように）。
+    func waitUntilFinished() {
+        queue.sync {}
+    }
 }
 
 /// ファイルパスごとのスクロール位置を UserDefaults に保存する（最近使った 200 件まで）。
