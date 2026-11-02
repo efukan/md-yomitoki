@@ -501,7 +501,7 @@ html.line-numbers { --content-left: 72px; }
   border-top: 1px solid var(--separator);
 }
 .rp-note {
-  margin-top: 6px;
+  margin-bottom: 4px;
   color: var(--text-secondary);
   font-size: 11px;
 }

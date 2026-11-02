@@ -832,9 +832,19 @@ final class EditorMarksView: NSView {
         inlineTask = Task { [weak self] in
             let diffs = await Task.detached { entries.map(\.inlineDiff) }.value
             guard let self, !Task.isCancelled else { return }
+            // 計算の間にマウスが離れたり印が変わったりしたら出さない
+            guard self.isMouseOver(key), self.marks.changes.removed == removed else {
+                self.pendingKey = nil
+                return
+            }
             let rewrites = zip(entries, diffs).map { RemovedLinesView.Rewrite(text: $0.text, inline: $1) }
             self.present(RemovedLinesView(rewrites: rewrites), for: key, anchor: anchor)
         }
+    }
+
+    private func isMouseOver(_ key: MarkKey?) -> Bool {
+        guard let key, let window, !isHiddenOrHasHiddenAncestor else { return false }
+        return hit(at: convert(window.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil))?.0 == key
     }
 
     private func present(_ content: RemovedLinesView, for key: MarkKey, anchor: NSRect) {
@@ -859,25 +869,26 @@ final class EditorMarksView: NSView {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(200))
                 guard let self, let popover = self.popover, popover.isShown else { return }
-                let screenPoint = NSEvent.mouseLocation
-                if popover.contentViewController?.view.window?.frame.contains(screenPoint) == true { continue }
-                if let window = self.window, !self.isHiddenOrHasHiddenAncestor {
-                    let point = self.convert(window.convertPoint(fromScreen: screenPoint), from: nil)
-                    if let (key, _) = self.hit(at: point), key == self.shownKey { continue }
-                }
-                self.closePopover()
+                if popover.contentViewController?.view.window?.frame.contains(NSEvent.mouseLocation) == true { continue }
+                if self.isMouseOver(self.shownKey) { continue }
+                // 次の印の吹き出しを計算している途中かもしれないので、それは止めない
+                self.closeShownPopover()
                 return
             }
         }
     }
 
-    func closePopover() {
-        inlineTask?.cancel()
-        pendingKey = nil
+    private func closeShownPopover() {
         watchTask?.cancel()
         popover?.close()
         popover = nil
         shownKey = nil
+    }
+
+    func closePopover() {
+        inlineTask?.cancel()
+        pendingKey = nil
+        closeShownPopover()
     }
 }
 
@@ -907,11 +918,10 @@ private struct RemovedLinesView: View {
                     heading("変更後").padding(.top, 4)
                     block(attributed(inline.new, color: .systemOrange.withAlphaComponent(0.45)), bar: .systemOrange)
                 } else {
-                    block(AttributedString(rewrite.text), bar: .systemOrange)
                     Text("変更が大きいため、文字ごとには比べていません")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .padding(.top, 2)
+                    block(AttributedString(rewrite.text), bar: .systemOrange)
                 }
             }
         }

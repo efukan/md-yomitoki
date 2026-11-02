@@ -639,7 +639,8 @@ function showRemoved(mark, mouseY) {
       removedTitle('変更前'),
       ...(e.inline
         ? [removedParts(e.inline.old, 'rp-old'), removedTitle('変更後'), removedParts(e.inline.new, 'rp-new')]
-        : [removedText(e.text), removedNote('変更が大きいため、文字ごとには比べていません')]),
+        // 説明は先に出す（長いと吹き出しの中でスクロールするので、後ろだと見えない）
+        : [removedNote('変更が大きいため、文字ごとには比べていません'), removedText(e.text)]),
     ]);
   }
   removedPopover.replaceChildren(...children);
